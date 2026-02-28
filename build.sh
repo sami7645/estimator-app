@@ -28,6 +28,7 @@ cp -r frontend/dist/* backend/staticfiles/
 echo "==> Running Django collectstatic..."
 python backend/manage.py collectstatic --noinput
 
-echo "==> Build complete. (Migrations run via preDeployCommand on Render)"
+echo "==> Running migrations (free tier: no preDeployCommand)..."
+python backend/manage.py migrate --noinput
 
 echo "==> Build complete."
