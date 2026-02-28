@@ -1,0 +1,349 @@
+.dataset-page {
+  --brand: #4f46e5;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  min-height: calc(100vh - 200px);
+  padding: 3rem 1.5rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.dataset-loading {
+  color: var(--text-muted);
+  font-size: 1rem;
+  padding: 4rem 0;
+}
+
+.dataset-inner {
+  width: 100%;
+  max-width: 900px;
+}
+
+.dataset-header {
+  margin-bottom: 2rem;
+}
+
+.dataset-header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dataset-subtitle {
+  font-size: 1rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* Stats grid */
+.dataset-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.dataset-stat-card {
+  background: #fff;
+  border-radius: 14px;
+  padding: 1rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  border: 1px solid #e2e8f0;
+}
+
+.dataset-stat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-left: 3px solid;
+  padding-left: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.dataset-stat-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.dataset-stat-total {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.dataset-stat-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dataset-stat-bar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.dataset-stat-bar-value {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dataset-accuracy-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  margin-left: 0.5rem;
+}
+
+.dataset-accuracy-bar {
+  height: 6px;
+  border-radius: 3px;
+  transition: width 0.3s;
+  min-width: 2px;
+}
+
+.dataset-accuracy-label {
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Trade sections */
+.dataset-trades-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.dataset-trade-section {
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+}
+
+.dataset-trade-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.dataset-trade-header:hover {
+  background: #f8fafc;
+}
+
+.dataset-trade-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dataset-trade-name {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+
+.dataset-trade-count {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.dataset-trade-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.dataset-upload-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--brand);
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dataset-upload-btn:hover {
+  background: #ede9fe;
+  border-color: #c7d2fe;
+}
+
+.dataset-upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dataset-upload-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e2e8f0;
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.dataset-trade-content {
+  padding: 0 1.25rem 1.25rem;
+}
+
+.dataset-empty-trade {
+  text-align: center;
+  padding: 2rem 0;
+  color: var(--text-muted);
+}
+
+.dataset-empty-trade svg {
+  margin-bottom: 0.75rem;
+  opacity: 0.4;
+}
+
+.dataset-empty-trade p {
+  font-size: 0.875rem;
+  margin: 0 0 1rem;
+}
+
+/* Images grid */
+.dataset-images-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.dataset-image-card {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.dataset-image-thumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  display: block;
+}
+
+.dataset-image-info {
+  padding: 0.5rem;
+}
+
+.dataset-image-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dataset-image-date {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.dataset-image-delete {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
+  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.dataset-image-card:hover .dataset-image-delete {
+  opacity: 1;
+}
+
+.dataset-image-delete:hover {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.dataset-image-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  min-height: 120px;
+  border-style: dashed;
+  transition: all 0.2s;
+}
+
+.dataset-image-add:hover {
+  background: #ede9fe;
+  border-color: #c7d2fe;
+  color: var(--brand);
+}
+
+.dataset-image-add span {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* Info banner */
+.dataset-info-banner {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  background: #ede9fe;
+  border-radius: 14px;
+  font-size: 0.875rem;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 2rem;
+}
+
+.dataset-info-banner svg {
+  color: var(--brand);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.dataset-info-banner strong {
+  color: var(--text);
+}
+
+.dataset-footer-actions {
+  display: flex;
+  justify-content: center;
+}

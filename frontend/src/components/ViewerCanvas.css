@@ -1,0 +1,18 @@
+.viewer-canvas-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: all;
+}
+
+/* Hide native cursor when using custom Konva crosshair */
+.viewer-canvas-wrapper[data-cursor="none"] canvas {
+  cursor: none !important;
+}
+
+/* Konva canvas should fill the wrapper exactly */
+.viewer-canvas-wrapper canvas {
+  display: block;
+}

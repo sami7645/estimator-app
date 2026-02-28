@@ -1,0 +1,19 @@
+Django>=5.2,<6.0
+djangorestframework>=3.16
+django-cors-headers>=4.9
+django-environ>=0.12
+openpyxl>=3.1
+pillow>=12.0
+PyMuPDF>=1.25
+
+# Production / Render
+gunicorn>=23.0
+whitenoise>=6.6
+dj-database-url>=2.2
+psycopg2-binary>=2.9
+
+# ML / Computer Vision
+opencv-python-headless>=4.13
+numpy>=2.4
+scikit-learn>=1.8
+scipy>=1.17

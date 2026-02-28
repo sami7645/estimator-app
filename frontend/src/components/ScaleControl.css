@@ -1,0 +1,496 @@
+.scale-control {
+  background: transparent;
+  width: 100%;
+  overflow: hidden;
+}
+
+.scale-control-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease;
+}
+
+.scale-control-header:hover {
+  background: #f9fafb;
+}
+
+.scale-control-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.scale-control-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.scale-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.scale-status-icon.calibrated {
+  background: #dcfce7;
+  color: #22c55e;
+}
+
+.scale-status-icon.uncalibrated {
+  background: #fef3c7;
+  color: #f59e0b;
+}
+
+.scale-status-inline {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  color: #92400e;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.scale-status-inline.uncalibrated {
+  background: #fffbeb;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+}
+
+.scale-control-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #111827;
+}
+
+.scale-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.scale-status-badge.calibrated {
+  color: #22c55e;
+  background: #dcfce7;
+}
+
+.scale-status-badge.uncalibrated {
+  color: #f59e0b;
+  background: #fef3c7;
+}
+
+.scale-control-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 4px;
+  transition: color 0.12s ease, background 0.12s ease;
+  flex-shrink: 0;
+}
+
+.scale-control-expand-btn:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.scale-control-expand-btn svg {
+  stroke-width: 2.5;
+}
+
+.scale-control-body {
+  padding: 0 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.scale-calibrated-display {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.scale-calibrated-value {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #374151;
+  font-variant-numeric: tabular-nums;
+  padding: 0.4rem 0.5rem;
+  background: #f3f4f6;
+  border-radius: 6px;
+}
+
+.scale-recalibrate-btn {
+  padding: 0.45rem 0.65rem;
+  background: #111827;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: background 0.12s ease;
+}
+
+.scale-recalibrate-btn:hover {
+  background: #1f2937;
+}
+
+.scale-mode-capsule {
+  display: flex;
+  background: #f3f4f6;
+  border-radius: 999px;
+  padding: 0.25rem;
+  gap: 0.25rem;
+}
+
+.scale-mode-option {
+  flex: 1;
+  padding: 0.5rem 1rem;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.scale-mode-option:hover {
+  color: #111827;
+}
+
+.scale-mode-option.active {
+  background: #ffffff;
+  color: #111827;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.scale-mode-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.scale-instruction-text {
+  font-size: 0.78rem;
+  color: #4b5563;
+  margin: 0;
+  line-height: 1.45;
+  padding: 0.4rem 0.5rem;
+  background: #f9fafb;
+  border-radius: 6px;
+}
+
+/* ── Header ── */
+
+.scale-header {
+  padding: 0.6rem 0.75rem 0.4rem;
+}
+
+.scale-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.scale-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.scale-status.calibrated {
+  color: #22c55e;
+}
+
+.scale-status.uncalibrated {
+  color: #f59e0b;
+}
+
+.scale-value-display {
+  padding: 0.25rem 0;
+}
+
+.scale-ratio {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #374151;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Actions ── */
+
+.scale-actions {
+  padding: 0 0.75rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.scale-select-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  margin-bottom: -0.2rem;
+}
+
+.scale-select {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #111827;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.scale-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.scale-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.scale-info-text {
+  font-size: 0.7rem;
+  color: #6b7280;
+  line-height: 1.4;
+  padding: 0.3rem 0.4rem;
+  background: #f9fafb;
+  border-radius: 4px;
+  margin-top: -0.2rem;
+}
+
+.scale-divider {
+  text-align: center;
+  font-size: 0.7rem;
+  color: #9ca3af;
+  margin: -0.2rem 0;
+}
+
+.scale-set-btn {
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  background: #111827;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  transition: background 0.12s ease;
+}
+
+.scale-set-btn:hover {
+  background: #1f2937;
+}
+
+/* ── Calibration mode ── */
+
+.scale-cal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem 0.25rem;
+}
+
+.scale-cal-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #374151;
+}
+
+.scale-cal-body {
+  padding: 0.35rem 0.75rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.scale-cal-instruction {
+  font-size: 0.78rem;
+  color: #4b5563;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.scale-cal-measured {
+  font-size: 0.78rem;
+  color: #374151;
+  padding: 0.3rem 0.5rem;
+  background: #f3f4f6;
+  border-radius: 4px;
+}
+
+.scale-cal-selected-scale {
+  font-size: 0.78rem;
+  color: #3b82f6;
+  padding: 0.3rem 0.5rem;
+  background: #eff6ff;
+  border-radius: 4px;
+  margin-top: 0.2rem;
+}
+
+.scale-cal-arch-select {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: #111827;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.scale-cal-arch-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.scale-cal-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.scale-cal-unit-static {
+  align-self: center;
+  font-size: 0.82rem;
+  color: #6b7280;
+  padding: 0 0.25rem;
+}
+
+.scale-cal-input-row {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.scale-cal-input {
+  flex: 1;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #111827;
+  background: #ffffff;
+  min-width: 0;
+}
+
+.scale-cal-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.scale-cal-unit {
+  width: 52px;
+  padding: 0.45rem 0.3rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  color: #111827;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.scale-cal-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.scale-cal-save {
+  flex: 1;
+  padding: 0.45rem;
+  background: #22c55e;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: background 0.12s ease;
+}
+
+.scale-cal-save:hover:not(:disabled) {
+  background: #16a34a;
+}
+
+.scale-cal-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scale-cal-cancel {
+  padding: 0.45rem 0.65rem;
+  background: transparent;
+  color: #6b7280;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 500;
+  transition: all 0.12s ease;
+}
+
+.scale-cal-cancel:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.scale-cal-cancel.wide {
+  width: 100%;
+  text-align: center;
+}
