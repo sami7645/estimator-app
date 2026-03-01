@@ -1,5 +1,7 @@
-export const API_BASE = 'http://localhost:8000/api'
-export const MEDIA_BASE = 'http://localhost:8000/media'
+// Use env vars in production (set by build: VITE_API_BASE=/api VITE_MEDIA_BASE=/media)
+// Fallback to localhost for local dev with Vite
+export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000/api'
+export const MEDIA_BASE = import.meta.env.VITE_MEDIA_BASE ?? 'http://localhost:8000/media'
 
 export type SubscriptionInfo = {
   plan: string
