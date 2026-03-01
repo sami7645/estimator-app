@@ -13,7 +13,7 @@ import TeamPage from './pages/TeamPage'
 import DatasetPage from './pages/DatasetPage'
 import DesignerApp from './DesignerApp'
 
-function RequireAuth({ children }: { children: JSX.Element }) {
+function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth()
   const location = useLocation()
 

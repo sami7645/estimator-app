@@ -103,8 +103,11 @@ export default function ProjectsPage() {
       } else {
         project = projects.find((p) => p.name === projectName)
         if (!project) {
-          project = await createProject({ name: projectName }, token ?? undefined)
-          setProjects((prev) => [...prev, project])
+          const created = await createProject({ name: projectName }, token ?? undefined)
+          if (created) {
+            project = created
+            setProjects((prev) => [...prev, created])
+          }
         }
       }
 
@@ -1068,11 +1071,12 @@ function UploadModal({
   // Poll for conversion progress when we have an uploaded plan set id
   useEffect(() => {
     if (!uploadedPlanSetId || !fetchPlanSet) return
+    const planSetId = uploadedPlanSetId
     let cancelled = false
     async function tick() {
       if (cancelled) return
       try {
-        const planSet = await fetchPlanSet(uploadedPlanSetId)
+        const planSet = await fetchPlanSet(planSetId)
         setProgressTotal(planSet.processing_pages_total ?? null)
         setProgressDone(planSet.processing_pages_done ?? null)
         if (planSet.processing_pages_total == null) {
