@@ -153,8 +153,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-# Frontend is copied into staticfiles/ during build.sh before collectstatic
-STATICFILES_DIRS = []
+# Frontend + demo images (seed_data copied to static/ in build.sh)
+STATICFILES_DIRS = [BASE_DIR / 'static'] if (BASE_DIR / 'static').exists() else []
 # Use WhiteNoise storage only if installed (production)
 try:
     import whitenoise

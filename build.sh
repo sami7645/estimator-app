@@ -25,6 +25,10 @@ echo "==> Copying frontend build into backend staticfiles..."
 mkdir -p backend/staticfiles
 cp -r frontend/dist/* backend/staticfiles/
 
+echo "==> Copying demo page images to static (baked into deploy)..."
+mkdir -p backend/static/demo/plans/pages/1
+cp seed_data/plans/pages/1/*.png backend/static/demo/plans/pages/1/
+
 echo "==> Running Django collectstatic..."
 python backend/manage.py collectstatic --noinput
 

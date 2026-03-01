@@ -1,11 +1,9 @@
 from django.contrib import admin
 from django.urls import path, include, re_path
-from django.conf import settings
-from django.conf.urls.static import static
 
 from rest_framework.routers import DefaultRouter
 
-from backend.views import serve_spa
+from backend.views import serve_spa, serve_media
 from core.views import (
     ProjectViewSet,
     PlanSetViewSet,
@@ -79,7 +77,9 @@ urlpatterns = [
     path("api/dataset-stats/", dataset_stats_all, name="dataset_stats"),
     # Router
     path("api/", include(router.urls)),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + [
+    # Media with fallback to static for demo images (Render ephemeral disk)
+    path("media/<path:path>", serve_media),
+] + [
     # SPA catch-all: serve index.html for / and all non-API paths (React Router handles routing)
     re_path(r"^(?P<path>.*)$", serve_spa),
 ]
