@@ -12,7 +12,7 @@ services:
     runtime: python
     plan: free
     buildCommand: chmod +x build.sh && ./build.sh
-    startCommand: gunicorn wsgi:application --bind 0.0.0.0:$PORT
+    startCommand: gunicorn wsgi:application --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     healthCheckPath: /api/health/
     envVars:
       - key: SECRET_KEY
