@@ -6,7 +6,7 @@ from django.http import FileResponse, Http404
 from pathlib import Path
 
 
-def serve_spa(request, path):
+def serve_spa(request, path=""):
     """Serve frontend index.html so the SPA router can handle the path."""
     index_path = settings.STATIC_ROOT / "index.html"
     if not index_path.exists():
