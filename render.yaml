@@ -1,5 +1,9 @@
 # Render Blueprint: one Web Service (Django + frontend) + Postgres
 # Deploy: connect repo in Render Dashboard, then use "New" -> "Blueprint" and select this file.
+#
+# IMPORTANT: PDF uploads and page images require persistent storage.
+# - Free tier: files are LOST on redeploy/restart (ephemeral filesystem).
+# - For persistent media: upgrade to plan: starter (or higher) and add the disk below.
 
 databases:
   - name: estimator-db
@@ -10,10 +14,15 @@ services:
   - type: web
     name: estimator-app
     runtime: python
-    plan: free
+    plan: free  # Upgrade to 'starter' and uncomment disk below for persistent media
     buildCommand: chmod +x build.sh && ./build.sh
     startCommand: chmod +x start.sh && ./start.sh
     healthCheckPath: /api/health/
+    # Persistent disk for PDFs/page images. Requires plan: starter. Uncomment when upgraded:
+    # disk:
+    #   name: media
+    #   mountPath: /opt/render/project/src/media
+    #   sizeGB: 1
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
@@ -27,3 +36,4 @@ services:
         fromDatabase:
           name: estimator-db
           property: connectionString
+      # When using persistent disk (plan: starter), add: MEDIA_ROOT=/opt/render/project/src/media

@@ -31,4 +31,7 @@ python backend/manage.py collectstatic --noinput
 echo "==> Running migrations (free tier: no preDeployCommand)..."
 python backend/manage.py migrate --noinput
 
+echo "==> Seeding demo plan (4-page PDF for testing without uploads)..."
+python backend/manage.py seed_demo_plan
+
 echo "==> Build complete."

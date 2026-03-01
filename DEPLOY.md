@@ -108,7 +108,7 @@ Build steps (in `build.sh`):
 
 Render’s filesystem is **ephemeral**: uploads (PDFs, plan images) are lost on redeploy. For production you can:
 
-- Add a **Persistent Disk** in Render and set `MEDIA_ROOT` to the mount path, or
+- Add a **Persistent Disk** (plan: starter) and set `MEDIA_ROOT` to the mount path, or
 - Use object storage (e.g. S3) and `django-storages` with a bucket.
 
 The app will run without either; only file uploads won’t persist across deploys until you add one of these.
@@ -116,6 +116,9 @@ The app will run without either; only file uploads won’t persist across deploy
 ---
 
 ## Troubleshooting
+
+- **PDF page images show broken (work locally but not on Render)**  
+  Render disk is ephemeral; uploads are lost on redeploy. A **demo plan** (4 pages) is seeded on each build so testers can use it without uploading. Look for "Demo Plan Set" in the designer. To persist custom uploads, upgrade to plan: starter and add a persistent disk.
 
 - **Build fails on “node: command not found”**  
   The script installs Node when missing. If it still fails, check the build logs for the Node install step and any path/arch issues.
