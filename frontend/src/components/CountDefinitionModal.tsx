@@ -3,6 +3,8 @@ import type { CountDefinition } from '../api'
 import { createCountDefinition, updateCountDefinition } from '../api'
 import './CountDefinitionModal.css'
 
+const PRESET_KEY = 'plan-viewer-count-preset'
+
 const PRIME_COLORS = [
   '#00ff00', '#ff0000', '#0000ff', '#ffff00', '#ff00ff', '#00ffff',
   '#ff8800', '#8800ff', '#0088ff', '#ff0088', '#88ff00', '#00ff88',
@@ -15,12 +17,30 @@ interface CountDefinitionModalProps {
   onSave: (def: CountDefinition) => void
 }
 
+function loadCountPreset(): { trade: string } {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PRESET_KEY) : null
+    if (raw) {
+      const p = JSON.parse(raw) as { trade?: string }
+      if (p?.trade) return { trade: p.trade }
+    }
+  } catch {}
+  return { trade: 'acoustic' }
+}
+
+function saveCountPreset(trade: string) {
+  try {
+    if (typeof window !== 'undefined') window.localStorage.setItem(PRESET_KEY, JSON.stringify({ trade }))
+  } catch {}
+}
+
 export default function CountDefinitionModal({
   planSetId,
   countDefinition,
   onClose,
   onSave,
 }: CountDefinitionModalProps) {
+  const preset = loadCountPreset()
   const [name, setName] = useState(countDefinition?.name || '')
   const [countType, setCountType] = useState<'area_perimeter' | 'linear_feet' | 'each'>(
     countDefinition?.count_type || 'each'
@@ -29,7 +49,7 @@ export default function CountDefinitionModal({
   const [shape, setShape] = useState<'square' | 'circle' | 'triangle'>(
     (countDefinition?.shape as any) || 'square'
   )
-  const [trade, setTrade] = useState(countDefinition?.trade || 'acoustic')
+  const [trade, setTrade] = useState(countDefinition?.trade ?? preset.trade)
   const [customColor, setCustomColor] = useState('')
 
   async function handleSubmit(e: React.FormEvent) {
@@ -57,6 +77,7 @@ export default function CountDefinitionModal({
       } else {
         result = await createCountDefinition(data)
       }
+      saveCountPreset(result.trade || trade)
       onSave(result)
     } catch (err) {
       alert('Failed to save: ' + (err as Error).message)

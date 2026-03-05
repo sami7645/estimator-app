@@ -15,6 +15,7 @@ from core.views import (
     DetectionViewSet,
     TradeDatasetViewSet,
     DatasetImageViewSet,
+    ProjectEmailViewSet,
     contact_create,
     contact_list,
     health_check,
@@ -44,6 +45,7 @@ router.register(r"dataset-examples", DatasetExampleViewSet)
 router.register(r"detections", DetectionViewSet)
 router.register(r"trade-datasets", TradeDatasetViewSet)
 router.register(r"dataset-images", DatasetImageViewSet)
+router.register(r"project-emails", ProjectEmailViewSet)
 
 
 urlpatterns = [

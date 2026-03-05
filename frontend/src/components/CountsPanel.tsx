@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import type { CountDefinition, CountItem, PlanPage, AutoDetectResult } from '../api'
 import { deleteCountDefinition, updateCountDefinition, runAutoDetect, fetchDatasetStats, type DatasetStats } from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -36,6 +36,8 @@ interface CountsPanelProps {
   calibrationPixelDist: number | null
   onCalibrationSaved: () => void
   onDetectionsReceived?: (result: AutoDetectResult) => void
+  selectedCountIds?: Set<number>
+  onSelectedCountIdsChange?: (ids: Set<number>) => void
 }
 
 export default function CountsPanel({
@@ -60,6 +62,8 @@ export default function CountsPanel({
   calibrationPixelDist,
   onCalibrationSaved,
   onDetectionsReceived,
+  selectedCountIds,
+  onSelectedCountIdsChange,
 }: CountsPanelProps) {
   const { token } = useAuth()
   const [showModal, setShowModal] = useState(false)
@@ -67,6 +71,7 @@ export default function CountsPanel({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; countId: number } | null>(null)
   const [editingCount, setEditingCount] = useState<CountDefinition | null>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+  const [isDragSelecting, setIsDragSelecting] = useState(false)
 
   // Section expand/collapse states
   const [isCountsExpanded, setIsCountsExpanded] = useState(true)
@@ -76,11 +81,15 @@ export default function CountsPanel({
   const [detectResult, setDetectResult] = useState<{ count: number; message: string } | null>(null)
   const [datasetStats, setDatasetStats] = useState<DatasetStats>({})
 
-  useEffect(() => {
-    if (showAutoDetect && token) {
+  const refreshDatasetStats = useCallback(() => {
+    if (token) {
       fetchDatasetStats(token, planSetId, selectedPage?.id).then(setDatasetStats).catch(() => {})
     }
-  }, [showAutoDetect, token, planSetId, selectedPage?.id])
+  }, [token, planSetId, selectedPage?.id])
+
+  useEffect(() => {
+    if (showAutoDetect) refreshDatasetStats()
+  }, [showAutoDetect, refreshDatasetStats])
 
   // Close context menu on outside click
   useEffect(() => {
@@ -93,6 +102,37 @@ export default function CountsPanel({
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [contextMenu])
+
+  // End drag selection on global mouseup
+  useEffect(() => {
+    if (!isDragSelecting) return
+    function handleMouseUp() { setIsDragSelecting(false) }
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => window.removeEventListener('mouseup', handleMouseUp)
+  }, [isDragSelecting])
+
+  function handleCountRowMouseDown(e: React.MouseEvent, countId: number) {
+    if (e.button !== 0) return
+    if (e.ctrlKey || e.metaKey) {
+      const next = new Set(selectedCountIds)
+      if (next.has(countId)) next.delete(countId)
+      else next.add(countId)
+      onSelectedCountIdsChange?.(next)
+      onActiveCountChange(countId)
+      return
+    }
+    setIsDragSelecting(true)
+    onSelectedCountIdsChange?.(new Set([countId]))
+    onActiveCountChange(activeCountId === countId ? null : countId)
+  }
+
+  function handleCountRowMouseEnter(countId: number) {
+    if (!isDragSelecting) return
+    const next = new Set(selectedCountIds)
+    next.add(countId)
+    onSelectedCountIdsChange?.(next)
+    onActiveCountChange(countId)
+  }
 
   function toggleExpand(id: number) {
     const next = new Set(expandedIds)
@@ -188,6 +228,7 @@ export default function CountsPanel({
               onClick={(e) => {
                 e.stopPropagation()
                 setEditingCount(null)
+                setIsCountsExpanded(true)
                 setShowModal(true)
               }}
               title="Add Count Definition"
@@ -232,8 +273,9 @@ export default function CountsPanel({
           return (
             <div
               key={countDef.id}
-              className={`count-row ${isActive ? 'active' : ''} ${isHidden ? 'hidden-count' : ''}`}
-              onClick={() => onActiveCountChange(isActive ? null : countDef.id)}
+              className={`count-row ${isActive ? 'active' : ''} ${isHidden ? 'hidden-count' : ''} ${selectedCountIds?.has(countDef.id) ? 'multi-selected' : ''}`}
+              onMouseDown={(e) => handleCountRowMouseDown(e, countDef.id)}
+              onMouseEnter={() => handleCountRowMouseEnter(countDef.id)}
               onContextMenu={(e) => handleContextMenu(e, countDef.id)}
             >
               <div className="count-row-header">
@@ -352,6 +394,7 @@ export default function CountsPanel({
                       onClick={(e) => {
                         e.stopPropagation()
                         onAddToDataset(countDef.trade, countDef.id)
+                        setTimeout(refreshDatasetStats, 500)
                       }}
                     >
                       Add Page to Dataset
@@ -538,6 +581,7 @@ export default function CountsPanel({
                     if (onDetectionsReceived) {
                       onDetectionsReceived(result)
                     }
+                    refreshDatasetStats()
                   } catch (err) {
                     setDetectResult({ count: 0, message: 'Detection failed: ' + (err as Error).message })
                   } finally {

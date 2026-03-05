@@ -13,8 +13,13 @@ import {
   ChevronRight,
   ChevronDown,
   Pencil,
+  Pin,
+  SlidersHorizontal,
+  Mail,
+  Inbox,
+  RefreshCw,
 } from 'lucide-react'
-import type { Project, PlanSet } from '../api'
+import type { Project, PlanSet, ProjectEmail } from '../api'
 import {
   fetchProjects,
   createProject,
@@ -23,12 +28,61 @@ import {
   uploadPlanSet,
   updateProject,
   deleteProject,
+  fetchProjectEmails,
   MEDIA_BASE,
 } from '../api'
 import { useAuth } from '../context/AuthContext'
 import './ProjectsPage.css'
 
 type ProjectCategory = 'all' | 'starred' | 'my' | 'archived'
+
+const LIST_COLUMN_ORDER_KEY = 'projects-list-column-order'
+const LIST_PIN_PROJECT_KEY = 'projects-list-pin-project'
+const FILTERS_CONFIG_KEY = 'projects-filters-config'
+
+type ListColumnKey = 'project' | 'planSet' | 'created' | 'pages' | 'actions'
+type ProjectsFilterKey = 'project' | 'email' | 'minSheets' | 'maxSheets' | 'dateFrom' | 'dateTo' | 'sort'
+
+const DEFAULT_LIST_COLUMNS: ListColumnKey[] = ['project', 'planSet', 'created', 'pages', 'actions']
+const ALL_FILTER_KEYS: ProjectsFilterKey[] = ['project', 'email', 'minSheets', 'maxSheets', 'dateFrom', 'dateTo', 'sort']
+
+function loadListColumnOrder(): ListColumnKey[] {
+  try {
+    const raw = localStorage.getItem(LIST_COLUMN_ORDER_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as string[]
+      if (Array.isArray(parsed) && parsed.length === DEFAULT_LIST_COLUMNS.length) {
+        const valid = new Set(DEFAULT_LIST_COLUMNS)
+        if (parsed.every((k) => valid.has(k as ListColumnKey))) return parsed as ListColumnKey[]
+      }
+    }
+  } catch {}
+  return [...DEFAULT_LIST_COLUMNS]
+}
+
+function loadListPinProject(): boolean {
+  try {
+    const raw = localStorage.getItem(LIST_PIN_PROJECT_KEY)
+    return raw === 'true'
+  } catch {}
+  return false
+}
+
+function loadProjectsFilterConfig(): ProjectsFilterKey[] {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(FILTERS_CONFIG_KEY) : null
+    if (raw) {
+      const parsed = JSON.parse(raw) as string[]
+      if (Array.isArray(parsed)) {
+        const valid = parsed.filter((k) => (ALL_FILTER_KEYS as string[]).includes(k)) as ProjectsFilterKey[]
+        if (valid.length === 0) return [] // user unchecked all; keep it that way
+        const missing = ALL_FILTER_KEYS.filter((k) => !valid.includes(k))
+        return [...valid, ...missing]
+      }
+    }
+  } catch {}
+  return [...ALL_FILTER_KEYS]
+}
 
 export default function ProjectsPage() {
   const navigate = useNavigate()
@@ -59,6 +113,13 @@ export default function ProjectsPage() {
   const [filterDateTo, setFilterDateTo] = useState<string>('')
   const [showFilters, setShowFilters] = useState(false)
   const [uploadedPlanSetId, setUploadedPlanSetId] = useState<number | null>(null)
+  const [listColumnOrder, setListColumnOrder] = useState<ListColumnKey[]>(loadListColumnOrder)
+  const [pinProjectColumn, setPinProjectColumn] = useState(loadListPinProject)
+  const [listColumnDragKey, setListColumnDragKey] = useState<ListColumnKey | null>(null)
+  const [activeFilters, setActiveFilters] = useState<ProjectsFilterKey[]>(loadProjectsFilterConfig)
+  const [showFilterConfig, setShowFilterConfig] = useState(false)
+  const [projectEmails, setProjectEmails] = useState<Map<number, ProjectEmail[]>>(new Map())
+  const [filterEstimatingEmail, setFilterEstimatingEmail] = useState('')
 
   useEffect(() => {
     void loadData()
@@ -68,6 +129,42 @@ export default function ProjectsPage() {
   useEffect(() => {
     localStorage.setItem('projects-view-mode', viewMode)
   }, [viewMode])
+
+  // If Project column is not first, pin state should be off so the icon
+  // never shows \"pinned\" when Project is in 2nd/3rd/etc positions.
+  useEffect(() => {
+    if (listColumnOrder[0] !== 'project' && pinProjectColumn) {
+      setPinProjectColumn(false)
+    }
+  }, [listColumnOrder, pinProjectColumn])
+
+  const FILTER_LABELS: Record<ProjectsFilterKey, string> = {
+    project: 'Project',
+    email: 'Estimating email',
+    minSheets: 'Min sheets',
+    maxSheets: 'Max sheets',
+    dateFrom: 'From date',
+    dateTo: 'To date',
+    sort: 'Sort',
+  }
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIST_COLUMN_ORDER_KEY, JSON.stringify(listColumnOrder))
+    } catch {}
+  }, [listColumnOrder])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIST_PIN_PROJECT_KEY, String(pinProjectColumn))
+    } catch {}
+  }, [pinProjectColumn])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FILTERS_CONFIG_KEY, JSON.stringify(activeFilters))
+    } catch {}
+  }, [activeFilters])
 
   // React to designer header actions via hash (#upload, #new)
   useEffect(() => {
@@ -122,6 +219,16 @@ export default function ProjectsPage() {
     }
   }
 
+  async function loadProjectEmailsForProject(projectId: number) {
+    if (projectEmails.has(projectId)) return
+    try {
+      const emails = await fetchProjectEmails(projectId)
+      setProjectEmails((prev) => new Map(prev).set(projectId, emails))
+    } catch {
+      // silently ignore - emails are optional
+    }
+  }
+
   function handleUploadComplete() {
     setUploadedPlanSetId(null)
     setShowUploadModal(false)
@@ -163,6 +270,10 @@ export default function ProjectsPage() {
     })
     .filter((ps) => {
       if (filterProjectId != null && ps.project !== filterProjectId) return false
+      if (filterEstimatingEmail) {
+        const proj = projects.find((p) => p.id === ps.project)
+        if (!proj || proj.estimating_email !== filterEstimatingEmail) return false
+      }
       const sheetCount = ps.pages?.length || 0
       if (filterMinSheets != null && sheetCount < filterMinSheets) return false
       if (filterMaxSheets != null && sheetCount > filterMaxSheets) return false
@@ -289,6 +400,7 @@ export default function ProjectsPage() {
                           next.add(project.id)
                           return next
                         })
+                        void loadProjectEmailsForProject(project.id)
                       }}
                     >
                       <span
@@ -321,7 +433,7 @@ export default function ProjectsPage() {
                               key={ps.id}
                               type="button"
                               className="projects-tree-plan"
-                              onClick={() => navigate(`/designer/plan-set/${ps.id}`)}
+                              onClick={() => navigate(`/designer/plan-set/${ps.id}/view`)}
                               title={ps.name}
                             >
                               <span className="projects-tree-plan-bullet" />
@@ -335,6 +447,43 @@ export default function ProjectsPage() {
                     {isExpanded && projectPlanSets.length === 0 && (
                       <div className="projects-tree-plan-empty">No plan sets</div>
                     )}
+                    {isExpanded && (
+                      <div className="projects-tree-plan-list projects-tree-email-list">
+                        <div className="projects-tree-email-section-title" title="Project emails: invitations and change notices">
+                          Emails
+                        </div>
+                        <div className="projects-tree-email-group">
+                          <span className="projects-tree-email-label">
+                            <Inbox size={12} /> Invitations ({(projectEmails.get(project.id) || []).filter((e) => e.category === 'invite').length})
+                          </span>
+                          {(projectEmails.get(project.id) || []).filter((e) => e.category === 'invite').length === 0 ? (
+                            <div className="projects-tree-email-empty">No invitations</div>
+                          ) : (
+                            (projectEmails.get(project.id) || []).filter((e) => e.category === 'invite').map((em) => (
+                              <div key={em.id} className="projects-tree-plan projects-tree-email-item" title={em.subject}>
+                                <Mail size={12} />
+                                <span className="projects-tree-plan-name">{em.subject || '(no subject)'}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        <div className="projects-tree-email-group">
+                          <span className="projects-tree-email-label">
+                            <RefreshCw size={12} /> Changes ({(projectEmails.get(project.id) || []).filter((e) => e.category === 'change').length})
+                          </span>
+                          {(projectEmails.get(project.id) || []).filter((e) => e.category === 'change').length === 0 ? (
+                            <div className="projects-tree-email-empty">No changes</div>
+                          ) : (
+                            (projectEmails.get(project.id) || []).filter((e) => e.category === 'change').map((em) => (
+                              <div key={em.id} className="projects-tree-plan projects-tree-email-item" title={em.subject}>
+                                <Mail size={12} />
+                                <span className="projects-tree-plan-name">{em.subject || '(no subject)'}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -346,121 +495,245 @@ export default function ProjectsPage() {
         <main className="projects-main">
           <div className="projects-toolbar-row">
             <div className="projects-toolbar-glass">
-              <div className="search-input-wrapper">
-                <Search size={16} className="search-input-icon" />
-                <input
-                  type="text"
-                  className="search-input"
-                  placeholder="Search plan sets…"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+              {/* Top row: search left, filter config + view toggle right */}
+              <div className="projects-toolbar-top">
+                <div className="search-input-wrapper">
+                  <Search size={16} className="search-input-icon" />
+                  <input
+                    type="text"
+                    className="search-input"
+                    placeholder="Search plan sets…"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <div className="projects-toolbar-main-actions">
+                  <div className="projects-filter-customize">
+                    <button
+                      type="button"
+                      className="projects-filter-config-btn"
+                      onClick={() => setShowFilterConfig((v) => !v)}
+                      title="Customize filters"
+                    >
+                      <SlidersHorizontal size={14} />
+                    </button>
+                    {showFilterConfig && (
+                      <div className="projects-filter-config-menu">
+                        {ALL_FILTER_KEYS.map((key) => {
+                          const enabled = activeFilters.includes(key)
+                          const idx = activeFilters.indexOf(key)
+                          return (
+                            <div key={key} className="projects-filter-config-row">
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={enabled}
+                                  onChange={() => {
+                                    setActiveFilters((prev) => {
+                                      if (prev.includes(key)) {
+                                        return prev.filter((k) => k !== key)
+                                      }
+                                      return [...prev, key]
+                                    })
+                                  }}
+                                />
+                                <span>{FILTER_LABELS[key]}</span>
+                              </label>
+                              <div className="projects-filter-config-arrows">
+                                <button
+                                  type="button"
+                                  disabled={!enabled || idx <= 0}
+                                  onClick={() =>
+                                    setActiveFilters((prev) => {
+                                      const i = prev.indexOf(key)
+                                      if (i <= 0) return prev
+                                      const next = [...prev]
+                                      const [item] = next.splice(i, 1)
+                                      next.splice(i - 1, 0, item)
+                                      return next
+                                    })
+                                  }
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!enabled || idx === -1 || idx >= activeFilters.length - 1}
+                                  onClick={() =>
+                                    setActiveFilters((prev) => {
+                                      const i = prev.indexOf(key)
+                                      if (i === -1 || i >= prev.length - 1) return prev
+                                      const next = [...prev]
+                                      const [item] = next.splice(i, 1)
+                                      next.splice(i + 1, 0, item)
+                                      return next
+                                    })
+                                  }
+                                >
+                                  ↓
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <div className="projects-view-toggle">
+                    <button
+                      type="button"
+                      className={`projects-view-toggle-btn ${
+                        viewMode === 'grid' ? 'active' : ''
+                      }`}
+                      onClick={() => setViewMode('grid')}
+                      title="Card view"
+                    >
+                      <LayoutGrid size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`projects-view-toggle-btn ${
+                        viewMode === 'list' ? 'active' : ''
+                      }`}
+                      onClick={() => setViewMode('list')}
+                      title="List view"
+                    >
+                      <ListIcon size={16} />
+                    </button>
+                  </div>
+                </div>
               </div>
-              
-              <select
-                className="filter-select"
-                value={filterProjectId || ''}
-                onChange={(e) => setFilterProjectId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">All projects</option>
-                {projects
-                  .filter((p) => {
-                    const isArchived = !!p.is_archived
-                    if (category === 'archived') return isArchived
-                    return !isArchived
-                  })
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-              </select>
-
-              <select
-                className="filter-select"
-                value={filterMinSheets || ''}
-                onChange={(e) => setFilterMinSheets(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">Min sheets</option>
-                <option value="1">1+ sheets</option>
-                <option value="5">5+ sheets</option>
-                <option value="10">10+ sheets</option>
-                <option value="20">20+ sheets</option>
-                <option value="50">50+ sheets</option>
-              </select>
-
-              <select
-                className="filter-select"
-                value={filterMaxSheets || ''}
-                onChange={(e) => setFilterMaxSheets(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">Max sheets</option>
-                <option value="5">Up to 5</option>
-                <option value="10">Up to 10</option>
-                <option value="20">Up to 20</option>
-                <option value="50">Up to 50</option>
-              </select>
-
-              <input
-                type="date"
-                className="filter-date-input"
-                value={filterDateFrom}
-                onChange={(e) => setFilterDateFrom(e.target.value)}
-                placeholder="From date"
-                title="Created from"
-              />
-
-              <input
-                type="date"
-                className="filter-date-input"
-                value={filterDateTo}
-                onChange={(e) => setFilterDateTo(e.target.value)}
-                placeholder="To date"
-                title="Created to"
-              />
-
-              <select
-                className="sort-select"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as 'name' | 'created_at')}
-              >
-                <option value="created_at">Newest first</option>
-                <option value="name">Name A–Z</option>
-              </select>
-
-              <div className="projects-view-toggle">
-                <button
-                  type="button"
-                  className={`projects-view-toggle-btn ${
-                    viewMode === 'grid' ? 'active' : ''
-                  }`}
-                  onClick={() => setViewMode('grid')}
-                  title="Card view"
-                >
-                  <LayoutGrid size={16} />
-                </button>
-                <button
-                  type="button"
-                  className={`projects-view-toggle-btn ${
-                    viewMode === 'list' ? 'active' : ''
-                  }`}
-                  onClick={() => setViewMode('list')}
-                  title="List view"
-                >
-                  <ListIcon size={16} />
-                </button>
+              {/* Second row: basic filter dropdowns */}
+              <div className="projects-toolbar-filters-row">
+              {activeFilters.map((key) => {
+                if (key === 'project') {
+                  return (
+                    <select
+                      key={key}
+                      className="filter-select"
+                      value={filterProjectId || ''}
+                      onChange={(e) => setFilterProjectId(e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">All projects</option>
+                      {projects
+                        .filter((p) => {
+                          const isArchived = !!p.is_archived
+                          if (category === 'archived') return isArchived
+                          return !isArchived
+                        })
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                    </select>
+                  )
+                }
+                if (key === 'email') {
+                  const emails = [...new Set(projects.map((p) => p.estimating_email).filter(Boolean))]
+                  if (emails.length === 0) return null
+                  return (
+                    <select
+                      key={key}
+                      className="filter-select"
+                      value={filterEstimatingEmail}
+                      onChange={(e) => setFilterEstimatingEmail(e.target.value)}
+                    >
+                      <option value="">All emails</option>
+                      {emails.map((em) => (
+                        <option key={em} value={em}>{em}</option>
+                      ))}
+                    </select>
+                  )
+                }
+                if (key === 'minSheets') {
+                  return (
+                    <select
+                      key={key}
+                      className="filter-select"
+                      value={filterMinSheets || ''}
+                      onChange={(e) => setFilterMinSheets(e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">Min sheets</option>
+                      <option value="1">1+ sheets</option>
+                      <option value="5">5+ sheets</option>
+                      <option value="10">10+ sheets</option>
+                      <option value="20">20+ sheets</option>
+                      <option value="50">50+ sheets</option>
+                    </select>
+                  )
+                }
+                if (key === 'maxSheets') {
+                  return (
+                    <select
+                      key={key}
+                      className="filter-select"
+                      value={filterMaxSheets || ''}
+                      onChange={(e) => setFilterMaxSheets(e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">Max sheets</option>
+                      <option value="5">Up to 5</option>
+                      <option value="10">Up to 10</option>
+                      <option value="20">Up to 20</option>
+                      <option value="50">Up to 50</option>
+                    </select>
+                  )
+                }
+                if (key === 'dateFrom') {
+                  return (
+                    <input
+                      key={key}
+                      type="date"
+                      className="filter-date-input"
+                      value={filterDateFrom}
+                      onChange={(e) => setFilterDateFrom(e.target.value)}
+                      placeholder="From date"
+                      title="Created from"
+                    />
+                  )
+                }
+                if (key === 'dateTo') {
+                  return (
+                    <input
+                      key={key}
+                      type="date"
+                      className="filter-date-input"
+                      value={filterDateTo}
+                      onChange={(e) => setFilterDateTo(e.target.value)}
+                      placeholder="To date"
+                      title="Created to"
+                    />
+                  )
+                }
+                if (key === 'sort') {
+                  return (
+                    <select
+                      key={key}
+                      className="sort-select"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as 'name' | 'created_at')}
+                    >
+                      <option value="created_at">Newest first</option>
+                      <option value="name">Name A–Z</option>
+                    </select>
+                  )
+                }
+                return null
+              })}
               </div>
             </div>
           </div>
 
+          <div className="projects-content-scroll">
           {viewMode === 'grid' ? (
-            <motion.div
-              className="projects-grid"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25, delay: 0.08 }}
-            >
-              {visiblePlanSets.map((planSet) => {
+            <div className="projects-grid-scroll">
+              <motion.div
+                className="projects-grid"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.25, delay: 0.08 }}
+              >
+                {visiblePlanSets.map((planSet) => {
                 const project = projects.find((p) => p.id === planSet.project)
                 const createdLabel = planSet.created_at
                   ? new Date(planSet.created_at).toLocaleDateString()
@@ -472,7 +745,7 @@ export default function ProjectsPage() {
                     key={planSet.id}
                     type="button"
                     className="project-card glass-card"
-                    onClick={() => navigate(`/designer/plan-set/${planSet.id}`)}
+                    onClick={() => navigate(`/designer/plan-set/${planSet.id}/view`)}
                     whileHover={{ y: -2, boxShadow: '0 10px 30px rgba(15,23,42,0.12)' }}
                     transition={{ type: 'spring', stiffness: 260, damping: 20 }}
                   >
@@ -571,12 +844,13 @@ export default function ProjectsPage() {
                   </motion.button>
                 )
               })}
+              </motion.div>
               {visiblePlanSets.length === 0 && (
                 <div className="empty-state glass-card">
                   <p>No plan sets found. Adjust filters or upload a new project.</p>
                 </div>
               )}
-            </motion.div>
+            </div>
           ) : (
             <motion.div
               className="projects-list"
@@ -584,13 +858,97 @@ export default function ProjectsPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25, delay: 0.08 }}
             >
-              <div className="projects-list-header">
-                <span className="projects-list-col-name">Plan set</span>
-                <span className="projects-list-col-project">Project</span>
-                <span className="projects-list-col-date">Created</span>
-                <span className="projects-list-col-pages">Sheets</span>
-                <span className="projects-list-col-actions">Actions</span>
+              <div
+                className="projects-list-header"
+                style={{
+                  gridTemplateColumns: listColumnOrder
+                    .map((k) =>
+                      k === 'project'
+                        ? 'minmax(150px, 2fr)'
+                        : k === 'planSet'
+                          ? 'minmax(180px, 2fr)'
+                          : k === 'created'
+                            ? 'minmax(100px, 1.2fr)'
+                            : k === 'pages'
+                              ? 'minmax(60px, 0.8fr)'
+                              : 'minmax(140px, 1.6fr)',
+                    )
+                    .join(' '),
+                }}
+              >
+                {listColumnOrder.map((colKey) => (
+                  <span
+                    key={colKey}
+                    className={
+                      (colKey === 'project'
+                        ? `projects-list-col-project ${pinProjectColumn ? 'projects-list-col-pinned' : ''}`
+                        : colKey === 'planSet'
+                          ? 'projects-list-col-name'
+                          : colKey === 'created'
+                            ? 'projects-list-col-date'
+                            : colKey === 'pages'
+                              ? 'projects-list-col-pages'
+                              : 'projects-list-col-actions') +
+                      (listColumnDragKey === colKey ? ' projects-list-col-dragging' : '')
+                    }
+                    draggable
+                    onDragStart={(e) => {
+                      if ((e.target as HTMLElement).closest?.('.projects-list-pin-btn')) {
+                        e.preventDefault()
+                        return
+                      }
+                      setListColumnDragKey(colKey)
+                    }}
+                    onDragEnd={() => setListColumnDragKey(null)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (!listColumnDragKey || listColumnDragKey === colKey) return
+                      let nextOrder: ListColumnKey[] | null = null
+                      setListColumnOrder((prev) => {
+                        const from = prev.indexOf(listColumnDragKey)
+                        const to = prev.indexOf(colKey)
+                        if (from === -1 || to === -1) return prev
+                        const next = [...prev]
+                        next.splice(from, 1)
+                        next.splice(to, 0, listColumnDragKey)
+                        nextOrder = next
+                        return next
+                      })
+                      // If Project column is no longer first after a manual drag,
+                      // automatically un-pin it so pin semantics stay \"Project is first\".
+                      if (nextOrder && nextOrder[0] !== 'project') {
+                        setPinProjectColumn(false)
+                      }
+                    }}
+                  >
+                    {colKey === 'project' && (
+                      <button
+                        type="button"
+                        className="projects-list-pin-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          // Pin also guarantees Project column is first
+                          setListColumnOrder((prev) => [
+                            'project',
+                            ...prev.filter((k) => k !== 'project'),
+                          ])
+                          setPinProjectColumn((p) => !p)
+                        }}
+                        title={pinProjectColumn ? 'Unpin Project column' : 'Pin Project column and keep it first'}
+                      >
+                        <Pin size={12} className={pinProjectColumn ? 'pinned' : ''} />
+                      </button>
+                    )}
+                    {colKey === 'project' && 'Project'}
+                    {colKey === 'planSet' && 'Plan set'}
+                    {colKey === 'created' && 'Created'}
+                    {colKey === 'pages' && 'Sheets'}
+                    {colKey === 'actions' && 'Actions'}
+                  </span>
+                ))}
               </div>
+              <div className="projects-list-body">
               {visiblePlanSets.map((planSet) => {
                 const project = projects.find((p) => p.id === planSet.project)
                 const createdLabel = planSet.created_at
@@ -603,22 +961,63 @@ export default function ProjectsPage() {
                     key={planSet.id}
                     type="button"
                     className="projects-list-row"
-                    onClick={() => navigate(`/designer/plan-set/${planSet.id}`)}
+                    onClick={() => navigate(`/designer/plan-set/${planSet.id}/view`)}
+                    style={{
+                      gridTemplateColumns: listColumnOrder
+                        .map((k) =>
+                          k === 'project'
+                            ? 'minmax(150px, 2fr)'
+                            : k === 'planSet'
+                              ? 'minmax(180px, 2fr)'
+                              : k === 'created'
+                                ? 'minmax(100px, 1.2fr)'
+                                : k === 'pages'
+                                  ? 'minmax(60px, 0.8fr)'
+                                  : 'minmax(140px, 1.6fr)',
+                        )
+                        .join(' '),
+                    }}
                   >
-                    <span className="projects-list-col-name">
-                      <span className="projects-list-plan-name">{planSet.name}</span>
-                    </span>
-                    <span className="projects-list-col-project">
-                      <span className="projects-list-project-name">
-                        {project?.name || 'Untitled project'}
-                      </span>
-                    </span>
-                    <span className="projects-list-col-date">{createdLabel}</span>
-                    <span className="projects-list-col-pages">{pagesCount}</span>
-                    <span
-                      className="projects-list-col-actions"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    {listColumnOrder.map((colKey) => {
+                      if (colKey === 'project') {
+                        return (
+                          <span
+                            key={colKey}
+                            className={`projects-list-col-project ${pinProjectColumn ? 'projects-list-col-pinned' : ''}`}
+                          >
+                            <span className="projects-list-project-name">
+                              {project?.name || 'Untitled project'}
+                            </span>
+                          </span>
+                        )
+                      }
+                      if (colKey === 'planSet') {
+                        return (
+                          <span key={colKey} className="projects-list-col-name">
+                            <span className="projects-list-plan-name">{planSet.name}</span>
+                          </span>
+                        )
+                      }
+                      if (colKey === 'created') {
+                        return (
+                          <span key={colKey} className="projects-list-col-date">
+                            {createdLabel}
+                          </span>
+                        )
+                      }
+                      if (colKey === 'pages') {
+                        return (
+                          <span key={colKey} className="projects-list-col-pages">
+                            {pagesCount}
+                          </span>
+                        )
+                      }
+                      return (
+                        <span
+                          key={colKey}
+                          className="projects-list-col-actions"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                       {project && token && (
                         <>
                           <button
@@ -688,9 +1087,12 @@ export default function ProjectsPage() {
                         </>
                       )}
                     </span>
+                      )
+                    })}
                   </button>
                 )
               })}
+              </div>
               {visiblePlanSets.length === 0 && (
                 <div className="empty-state glass-card">
                   <p>No plan sets found. Adjust filters or upload a new project.</p>
@@ -698,6 +1100,7 @@ export default function ProjectsPage() {
               )}
             </motion.div>
           )}
+          </div>
         </main>
       </div>
 
@@ -803,6 +1206,7 @@ function ProjectEditModal({
   const navigate = useNavigate()
   const [name, setName] = useState(project.name)
   const [clientName, setClientName] = useState(project.client_name)
+  const [estimatingEmail, setEstimatingEmail] = useState(project.estimating_email || '')
   const [description, setDescription] = useState(project.description)
   const [isStarred, setIsStarred] = useState(!!project.is_starred)
   const [isArchived, setIsArchived] = useState(!!project.is_archived)
@@ -822,6 +1226,7 @@ function ProjectEditModal({
         {
           name,
           client_name: clientName,
+          estimating_email: estimatingEmail,
           description,
           is_starred: isStarred,
           is_archived: isArchived,
@@ -881,6 +1286,15 @@ function ProjectEditModal({
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
               placeholder="Optional"
+            />
+          </div>
+          <div className="form-group">
+            <label>Estimating email</label>
+            <input
+              type="email"
+              value={estimatingEmail}
+              onChange={(e) => setEstimatingEmail(e.target.value)}
+              placeholder="e.g. bids@company.com"
             />
           </div>
           <div className="form-group">
@@ -1006,7 +1420,7 @@ function ProjectEditModal({
                         type="button"
                         className="btn-secondary"
                         onClick={() => {
-                          navigate(`/designer/plan-set/${ps.id}`)
+                          navigate(`/designer/plan-set/${ps.id}/view`)
                           onClose()
                         }}
                         style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}

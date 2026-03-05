@@ -68,3 +68,64 @@
   background: linear-gradient(to bottom, transparent, #e5e7eb, transparent);
 }
 
+.toolbar-note-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.toolbar-note-color-btn {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid #d1d5db;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.14s ease;
+}
+
+.toolbar-note-color-btn:hover {
+  border-color: #9ca3af;
+}
+
+.toolbar-note-color-picker {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
+  z-index: 50;
+}
+
+.toolbar-note-color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), 0 0 6px rgba(0, 0, 0, 0.15);
+  transition:
+    border-color 0.12s ease,
+    transform 0.08s ease,
+    box-shadow 0.12s ease;
+}
+
+.toolbar-note-color-swatch:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 1), 0 0 10px rgba(0, 0, 0, 0.25);
+}
+
+.toolbar-note-color-swatch.active {
+  border-color: #111827;
+}
+
+

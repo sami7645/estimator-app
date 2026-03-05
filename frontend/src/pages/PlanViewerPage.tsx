@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { PlanSet, PlanPage, CountDefinition, CountItem, AutoDetectResult } from '../api'
 import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, MEDIA_BASE } from '../api'
 import { exportPlanAsPdf } from '../utils/exportPlanPdf'
 import CountsPanel from '../components/CountsPanel'
 import ViewerCanvas from '../components/ViewerCanvas'
-import Toolbar from '../components/Toolbar'
+import Toolbar, { type SaveStatus } from '../components/Toolbar'
 import PagesSidebar, { type PagesViewMode } from '../components/PagesSidebar'
 import ExcelPreviewModal from '../components/ExcelPreviewModal'
 import { PanelLeftClose, PanelLeft } from 'lucide-react'
@@ -97,9 +97,88 @@ export default function PlanViewerPage() {
   const [pagesSidebarVisible, setPagesSidebarVisible] = useState(true)
   const [exportPdfLoading, setExportPdfLoading] = useState(false)
   const [exportPdfProgress, setExportPdfProgress] = useState<{ current: number; total: number } | null>(null)
+  const [exportPdfModalOpen, setExportPdfModalOpen] = useState(false)
+  const [exportPdfSelectedPageIds, setExportPdfSelectedPageIds] = useState<Set<number>>(new Set())
+  const [exportPdfFilterWithContentOnly, setExportPdfFilterWithContentOnly] = useState(false)
+  const [exportPdfAllCountItems, setExportPdfAllCountItems] = useState<CountItem[]>([])
   const [pagesViewMode, setPagesViewMode] = useState<PagesViewMode>('images')
   const [excelModalOpen, setExcelModalOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [noteMode, setNoteMode] = useState(false)
+  const [noteColor, setNoteColor] = useState('#fef08a')
+  const [notes, setNotes] = useState<Map<number, { id: string; x: number; y: number; text: string; color: string }[]>>(new Map())
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const [editingNoteDraft, setEditingNoteDraft] = useState<string>('')
+  const [pendingNotePos, setPendingNotePos] = useState<{ x: number; y: number } | null>(null)
+  const [noteEditorDragging, setNoteEditorDragging] = useState(false)
+  const [noteEditorDragPosition, setNoteEditorDragPosition] = useState<{ x: number; y: number } | null>(null)
+  const noteEditorDragRef = useRef<{
+    startClientX: number
+    startClientY: number
+    startNX: number
+    startNY: number
+    currentNX: number
+    currentNY: number
+    isNew: boolean
+    noteId?: string
+  } | null>(null)
+  const [selectedCountIds, setSelectedCountIds] = useState<Set<number>>(new Set())
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
+  const [noteDraggingId, setNoteDraggingId] = useState<string | null>(null)
+  const [noteDragPosition, setNoteDragPosition] = useState<{ x: number; y: number } | null>(null)
+  const noteCardDragRef = useRef<{ noteId: string; startClientX: number; startClientY: number; startNX: number; startNY: number; currentNX: number; currentNY: number } | null>(null)
+
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSavesRef = useRef(0)
+  const savingStartedRef = useRef<number>(0)
+  const SAVE_SHOW_SAVED_MS = 2500
+  const SAVE_MIN_SAVING_MS = 400
+
+  const notesLoadedForPlanRef = useRef<number | null>(null)
+  const notesSaveFirstRunForPlanRef = useRef<number | null>(null)
+
+  // Load notes from localStorage when plan set changes (exact position + text per page)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (Number.isNaN(planSetId)) return
+    const key = `plan-notes:v1:${planSetId}`
+    try {
+      const raw = window.localStorage.getItem(key)
+      const map = new Map<number, { id: string; x: number; y: number; text: string; color: string }[]>()
+      if (raw) {
+        const obj = JSON.parse(raw) as Record<string, { id: string; x: number; y: number; text: string; color: string }[]>
+        Object.entries(obj).forEach(([pageId, arr]) => {
+          map.set(Number(pageId), arr)
+        })
+      }
+      setNotes(map)
+      notesLoadedForPlanRef.current = planSetId
+    } catch {
+      notesLoadedForPlanRef.current = planSetId
+    }
+  }, [planSetId])
+
+  // Save notes to localStorage (exact position + text). Skip first effect run per plan so we don't overwrite before load.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (Number.isNaN(planSetId)) return
+    if (notesLoadedForPlanRef.current !== planSetId) return
+    if (notesSaveFirstRunForPlanRef.current !== planSetId) {
+      notesSaveFirstRunForPlanRef.current = planSetId
+      return
+    }
+    const key = `plan-notes:v1:${planSetId}`
+    const obj: Record<string, { id: string; x: number; y: number; text: string; color: string }[]> = {}
+    notes.forEach((value, pageId) => {
+      obj[String(pageId)] = value
+    })
+    try {
+      window.localStorage.setItem(key, JSON.stringify(obj))
+    } catch {
+      // ignore quota errors
+    }
+  }, [notes, planSetId])
 
   // Ref for instant isDrawing check (avoids stale closure in keyboard handler)
   const isDrawingRef = useRef(false)
@@ -146,22 +225,104 @@ export default function PlanViewerPage() {
     }
   }
 
-  /* ─── ESC to deselect active count / cancel calibration ─── */
+  /* ─── ESC to deselect active count / cancel calibration, T for note mode ─── */
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+
       if (e.key === 'Escape') {
-        if (isCalibrating) {
+        if (pendingNotePos || editingNoteId) {
+          handleNoteDismiss()
+        } else if (noteMode) {
+          setNoteMode(false)
+        } else if (isCalibrating) {
           setIsCalibrating(false)
           setCalibrationPixelDist(null)
         } else {
           setActiveCountId(null)
         }
       }
+      // T or Ctrl+T / Cmd+T: toggle note mode (like Togal AI — T to add note, T again to close and go back to select)
+      if ((e.key === 't' || e.key === 'T') && (!e.ctrlKey && !e.metaKey)) {
+        e.preventDefault()
+        setNoteMode(prev => !prev)
+        if (!noteMode) setPanMode(false)
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 't' || e.key === 'T')) {
+        e.preventDefault()
+        e.stopPropagation()
+        setNoteMode(prev => !prev)
+        if (!noteMode) setPanMode(false)
+      }
+      const delta = 0.008
+      if (selectedNoteId && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        const pageNotes = selectedPage ? notes.get(selectedPage.id) || [] : []
+        const note = pageNotes.find((n) => n.id === selectedNoteId)
+        if (note) {
+          e.preventDefault()
+          let nx = note.x
+          let ny = note.y
+          if (e.key === 'ArrowLeft') nx -= delta
+          else if (e.key === 'ArrowRight') nx += delta
+          else if (e.key === 'ArrowUp') ny -= delta
+          else if (e.key === 'ArrowDown') ny += delta
+          nx = Math.max(0, Math.min(1, nx))
+          ny = Math.max(0, Math.min(1, ny))
+          handleNoteMoved(note.id, nx, ny)
+        }
+      }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isCalibrating])
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [isCalibrating, noteMode, selectedNoteId, selectedPage, notes])
+
+  /* ─── Save tracking ─── */
+
+  function markSaving() {
+    pendingSavesRef.current++
+    savingStartedRef.current = Date.now()
+    setSaveStatus('saving')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+  }
+
+  function markSaved() {
+    pendingSavesRef.current = Math.max(0, pendingSavesRef.current - 1)
+    if (pendingSavesRef.current === 0) {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      const elapsed = Date.now() - savingStartedRef.current
+      const delayBeforeSaved = Math.max(0, SAVE_MIN_SAVING_MS - elapsed)
+      saveTimerRef.current = setTimeout(() => {
+        setSaveStatus('saved')
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = setTimeout(() => setSaveStatus('idle'), SAVE_SHOW_SAVED_MS)
+      }, delayBeforeSaved)
+    }
+  }
+
+  function markSaveError() {
+    pendingSavesRef.current = Math.max(0, pendingSavesRef.current - 1)
+    setSaveStatus('error')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      if (pendingSavesRef.current === 0) setSaveStatus('idle')
+    }, 5000)
+  }
+
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (pendingSavesRef.current > 0) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
+  }, [])
 
   /* ─── Data loading ─── */
 
@@ -522,6 +683,7 @@ export default function PlanViewerPage() {
 
   function handleCountDefinitionCreated(def: CountDefinition) {
     setCountDefinitions([...countDefinitions, def])
+    setActiveCountId(def.id)
   }
 
   function handleCountDefinitionUpdated(def: CountDefinition) {
@@ -535,6 +697,17 @@ export default function PlanViewerPage() {
     pushHistory(newItems)
     if (activeCountId === id) setActiveCountId(null)
   }
+
+  // When user selects a count, save its trade as preset for next "Create count" (dataset/trade preset for all counts).
+  useEffect(() => {
+    if (activeCountId == null) return
+    const def = countDefinitions.find((d) => d.id === activeCountId)
+    if (def?.trade) {
+      try {
+        window.localStorage.setItem('plan-viewer-count-preset', JSON.stringify({ trade: def.trade }))
+      } catch {}
+    }
+  }, [activeCountId, countDefinitions])
 
   /* ─── Count item CRUD ─── */
 
@@ -680,21 +853,39 @@ export default function PlanViewerPage() {
 
   /* ─── Export as PDF ─── */
 
-  async function handleExportPdf() {
+  useEffect(() => {
+    if (!exportPdfModalOpen || !planSet?.id) return
+    setExportPdfSelectedPageIds(new Set((planSet.pages || []).map((p) => p.id)))
+    fetchCountItems(undefined, undefined, planSet.id)
+      .then((items) => setExportPdfAllCountItems(items))
+      .catch(() => setExportPdfAllCountItems([]))
+  }, [exportPdfModalOpen, planSet?.id])
+
+  function pageHasCountsOrNotes(pageId: number): boolean {
+    const hasCounts = exportPdfAllCountItems.some((i) => i.page === pageId)
+    const pageNotes = notes.get(pageId) || []
+    return hasCounts || pageNotes.length > 0
+  }
+
+  async function handleExportPdf(selectedIds?: number[]) {
     if (!planSet || !planSet.pages?.length) {
       alert('No plan set or pages to export.')
       return
     }
+    const pageIdsToExport = selectedIds && selectedIds.length > 0 ? selectedIds : planSet.pages.map((p) => p.id)
+    const total = pageIdsToExport.length
     setExportPdfLoading(true)
-    setExportPdfProgress({ current: 0, total: planSet.pages.length })
+    setExportPdfProgress({ current: 0, total })
     try {
       await exportPlanAsPdf({
         planSet,
         pages: planSet.pages,
+        pageIds: pageIdsToExport,
         countDefinitions,
         getCountItemsForPage: (pageId: number) => fetchCountItems(undefined, pageId),
         onProgress: (current, total) => setExportPdfProgress({ current, total }),
       })
+      setExportPdfModalOpen(false)
     } catch (err) {
       console.error('Export PDF failed:', err)
       alert('Failed to export PDF: ' + (err instanceof Error ? err.message : String(err)))
@@ -703,6 +894,195 @@ export default function PlanViewerPage() {
       setExportPdfProgress(null)
     }
   }
+
+  /* ─── Note creation ─── */
+
+  function handleNoteCreated(nx: number, ny: number) {
+    if (!selectedPage) return
+    setPendingNotePos({ x: nx, y: ny })
+    setEditingNoteDraft('')
+    setEditingNoteId(null)
+  }
+
+  function handleNoteTextChange(noteId: string, text: string) {
+    if (!selectedPage) return
+    setNotes(prev => {
+      const next = new Map(prev)
+      const existing = next.get(selectedPage.id) || []
+      next.set(selectedPage.id, existing.map(n => n.id === noteId ? { ...n, text } : n))
+      return next
+    })
+  }
+
+  function handleNoteEditDone(noteId: string) {
+    if (!selectedPage) return
+    setEditingNoteId(null)
+    const pageNotes = notes.get(selectedPage.id) || []
+    const note = pageNotes.find(n => n.id === noteId)
+    if (note && !note.text.trim()) {
+      setNotes(prev => {
+        const next = new Map(prev)
+        next.set(selectedPage.id, (next.get(selectedPage.id) || []).filter(n => n.id !== noteId))
+        return next
+      })
+    }
+  }
+
+  function handleNoteDelete(noteId: string) {
+    if (!selectedPage) return
+    setNotes(prev => {
+      const next = new Map(prev)
+      next.set(selectedPage.id, (next.get(selectedPage.id) || []).filter(n => n.id !== noteId))
+      return next
+    })
+    if (editingNoteId === noteId) setEditingNoteId(null)
+  }
+
+  function handleNoteMoved(noteId: string, nx: number, ny: number) {
+    if (!selectedPage) return
+    setNotes(prev => {
+      const next = new Map(prev)
+      const existing = next.get(selectedPage.id) || []
+      next.set(
+        selectedPage.id,
+        existing.map(n => (n.id === noteId ? { ...n, x: nx, y: ny } : n)),
+      )
+      return next
+    })
+  }
+
+  const currentPageNotes = selectedPage ? (notes.get(selectedPage.id) || []) : []
+
+  function handleNoteEdit(noteId: string) {
+    if (!selectedPage) return
+    const pageNotes = notes.get(selectedPage.id) || []
+    const note = pageNotes.find(n => n.id === noteId)
+    setEditingNoteId(noteId)
+    setEditingNoteDraft(note?.text ?? '')
+  }
+
+  function handleNoteSubmit() {
+    if (!selectedPage) return
+    const text = editingNoteDraft.trim()
+
+    // Creating a brand-new note (text-first flow)
+    if (pendingNotePos) {
+      if (text) {
+        const id = `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+        const note = { id, x: pendingNotePos.x, y: pendingNotePos.y, text, color: noteColor }
+        setNotes(prev => {
+          const next = new Map(prev)
+          const existing = next.get(selectedPage.id) || []
+          next.set(selectedPage.id, [...existing, note])
+          return next
+        })
+      }
+      setPendingNotePos(null)
+      setEditingNoteDraft('')
+      return
+    }
+
+    // Editing an existing note
+    if (editingNoteId) {
+      if (text) {
+        handleNoteTextChange(editingNoteId, text)
+      } else {
+        handleNoteDelete(editingNoteId)
+      }
+      setEditingNoteId(null)
+      setEditingNoteDraft('')
+    }
+  }
+
+  function handleNoteDismiss() {
+    setPendingNotePos(null)
+    setEditingNoteId(null)
+    setEditingNoteDraft('')
+    setNoteEditorDragging(false)
+    setNoteEditorDragPosition(null)
+    noteEditorDragRef.current = null
+  }
+
+  // Dragging the note editor overlay: update ref every move, throttle setState to requestAnimationFrame for instant feel
+  useEffect(() => {
+    if (!noteEditorDragging || !imageSize.width || !imageSize.height) return
+    const ez = fitZoom * zoom
+    let rafId = 0
+    let rafScheduled = false
+    const onMove = (e: MouseEvent) => {
+      const r = noteEditorDragRef.current
+      if (!r) return
+      const dx = (e.clientX - r.startClientX) / ez / imageSize.width
+      const dy = (e.clientY - r.startClientY) / ez / imageSize.height
+      r.currentNX = Math.max(0, Math.min(1, r.startNX + dx))
+      r.currentNY = Math.max(0, Math.min(1, r.startNY + dy))
+      if (!rafScheduled) {
+        rafScheduled = true
+        rafId = requestAnimationFrame(() => {
+          rafScheduled = false
+          const ref = noteEditorDragRef.current
+          if (ref) setNoteEditorDragPosition({ x: ref.currentNX, y: ref.currentNY })
+        })
+      }
+    }
+    const onUp = () => {
+      const r = noteEditorDragRef.current
+      setNoteEditorDragging(false)
+      setNoteEditorDragPosition(null)
+      if (r) {
+        if (r.isNew) setPendingNotePos({ x: r.currentNX, y: r.currentNY })
+        else if (r.noteId) handleNoteMoved(r.noteId, r.currentNX, r.currentNY)
+      }
+      noteEditorDragRef.current = null
+    }
+    window.addEventListener('mousemove', onMove, { passive: true })
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [noteEditorDragging, fitZoom, zoom, imageSize.width, imageSize.height])
+
+  // Dragging a placed note card (HTML overlay): ref + RAF for smoothness; commit on mouseup
+  useEffect(() => {
+    if (!noteDraggingId || !imageSize.width || !imageSize.height) return
+    const ez = fitZoom * zoom
+    let rafId = 0
+    let rafScheduled = false
+    const onMove = (e: MouseEvent) => {
+      const r = noteCardDragRef.current
+      if (!r) return
+      const dx = (e.clientX - r.startClientX) / ez / imageSize.width
+      const dy = (e.clientY - r.startClientY) / ez / imageSize.height
+      const nx = Math.max(0, Math.min(1, r.startNX + dx))
+      const ny = Math.max(0, Math.min(1, r.startNY + dy))
+      r.currentNX = nx
+      r.currentNY = ny
+      if (!rafScheduled) {
+        rafScheduled = true
+        rafId = requestAnimationFrame(() => {
+          rafScheduled = false
+          const ref = noteCardDragRef.current
+          if (ref) setNoteDragPosition({ x: ref.currentNX, y: ref.currentNY })
+        })
+      }
+    }
+    const onUp = () => {
+      const r = noteCardDragRef.current
+      setNoteDraggingId(null)
+      setNoteDragPosition(null)
+      if (r) handleNoteMoved(r.noteId, r.currentNX, r.currentNY)
+      noteCardDragRef.current = null
+    }
+    window.addEventListener('mousemove', onMove, { passive: true })
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [noteDraggingId, fitZoom, zoom, imageSize.width, imageSize.height])
 
   /* ─── Undo / Redo buttons ─── */
 
@@ -723,7 +1103,8 @@ export default function PlanViewerPage() {
 
       if (added.length === 1 && (added[0].geometry_type === 'polyline' || added[0].geometry_type === 'polygon')) {
         const item = added[0]
-        deleteCountItem(item.id).catch(() => {})
+        markSaving()
+        deleteCountItem(item.id).then(() => markSaved()).catch(() => markSaveError())
         setCountItems([...prevItems])
         setHistoryIndex(prevIndex)
         setActiveCountId(item.count_definition)
@@ -769,6 +1150,7 @@ export default function PlanViewerPage() {
       // Check if any added items were deleted from the backend (by a previous undo)
       // and need to be re-created for persistence
       if (added.length > 0) {
+        markSaving()
         Promise.all(
           added.map((item) =>
             createCountItem({
@@ -783,8 +1165,8 @@ export default function PlanViewerPage() {
             }).then((newItem) => ({ oldId: item.id, newItem }))
           )
         ).then((results) => {
+          markSaved()
           const idMap = new Map(results.map((r) => [r.oldId, r.newItem]))
-          // Update all future history entries with new IDs
           const newHistory = history.map((snapshot, idx) => {
             if (idx <= historyIndex) return snapshot
             return snapshot.map((si) => idMap.get(si.id) ?? si)
@@ -794,6 +1176,7 @@ export default function PlanViewerPage() {
           setHistoryIndex(nextIndex)
           resetDrawingRef.current?.()
         }).catch(() => {
+          markSaveError()
           setCountItems([...nextItems])
           setHistoryIndex(nextIndex)
         })
@@ -917,7 +1300,8 @@ export default function PlanViewerPage() {
     let scrollX0 = 0, scrollY0 = 0
 
     function onMouseDown(e: MouseEvent) {
-      if (!panMode) return
+      if (e.button !== 0) return
+      if (!panMode && !e.ctrlKey) return
       dragging = true
       startX = e.clientX
       startY = e.clientY
@@ -1077,6 +1461,20 @@ export default function PlanViewerPage() {
                 Fit
               </button>
             </div>
+            <div
+              className={`viewer-save-status viewer-save-${saveStatus}`}
+              title={
+                saveStatus === 'saving' ? 'Saving…' :
+                saveStatus === 'saved' ? 'Saved' :
+                saveStatus === 'error' ? 'Save failed' :
+                'Auto-save'
+              }
+            >
+              {saveStatus === 'saving' && <Loader2 size={16} className="viewer-save-spin" />}
+              {saveStatus === 'saved' && <Check size={16} />}
+              {saveStatus === 'error' && <AlertCircle size={16} />}
+              {saveStatus === 'idle' && <Check size={16} />}
+            </div>
           </div>
         )}
 
@@ -1084,9 +1482,19 @@ export default function PlanViewerPage() {
           <button
             type="button"
             className="viewer-export-pdf-btn"
-            onClick={handleExportPdf}
+            onClick={() => setExcelModalOpen(true)}
+            title="Export counts to Excel"
+            aria-label="Export to Excel"
+          >
+            <FileSpreadsheet size={20} />
+            <span className="viewer-export-pdf-label">Export Excel</span>
+          </button>
+          <button
+            type="button"
+            className="viewer-export-pdf-btn"
+            onClick={() => planSet?.pages?.length ? setExportPdfModalOpen(true) : undefined}
             disabled={exportPdfLoading || !planSet?.pages?.length}
-            title="Export as PDF (all images with detections)"
+            title="Export as PDF – choose which pages to include"
             aria-label="Export as PDF"
           >
             <FileDown size={20} />
@@ -1143,7 +1551,10 @@ export default function PlanViewerPage() {
               countsVisible={countsVisible}
               onSetPanMode={setPanMode}
               onToggleCountsVisible={() => setCountsVisible((v) => !v)}
-              onExportExcel={() => setExcelModalOpen(true)}
+              noteMode={noteMode}
+              noteColor={noteColor}
+              onSetNoteMode={setNoteMode}
+              onNoteColorChange={setNoteColor}
             />
           </div>
 
@@ -1199,6 +1610,214 @@ export default function PlanViewerPage() {
                           height: imageSize.height || undefined,
                         }}
                       />
+                      {imageSize.width > 0 && imageSize.height > 0 && (pendingNotePos || editingNoteId) && (() => {
+                        let left: number, top: number, isNew: boolean, activeColor: string, noteIdForDelete: string | null = null
+                        const baseWidth = 420
+                        const uiScale = ez > 0 ? 1 / ez : 1
+                        if (noteEditorDragging && noteEditorDragPosition) {
+                          left = noteEditorDragPosition.x * imageSize.width
+                          top = noteEditorDragPosition.y * imageSize.height + 8
+                          isNew = !!pendingNotePos
+                          activeColor = pendingNotePos ? noteColor : (currentPageNotes.find(n => n.id === editingNoteId)?.color ?? noteColor)
+                          noteIdForDelete = editingNoteId ? (currentPageNotes.find(n => n.id === editingNoteId)?.id ?? null) : null
+                        } else if (pendingNotePos) {
+                          left = pendingNotePos.x * imageSize.width
+                          top = pendingNotePos.y * imageSize.height + 8
+                          isNew = true
+                          activeColor = noteColor
+                        } else {
+                          const note = currentPageNotes.find(n => n.id === editingNoteId)
+                          if (!note) return null
+                          left = note.x * imageSize.width
+                          top = note.y * imageSize.height + 8
+                          isNew = false
+                          activeColor = note.color
+                          noteIdForDelete = note.id
+                        }
+                        return (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left,
+                              top,
+                              transform: `translate(-50%, 0) scale(${uiScale})`,
+                              transformOrigin: 'top center',
+                              background: '#ffffff',
+                              borderRadius: 8,
+                              border: '1px solid #e5e7eb',
+                              boxShadow: '0 8px 24px rgba(15, 23, 42, 0.25)',
+                              padding: '12px 14px 14px',
+                              width: baseWidth,
+                              zIndex: 40,
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 4,
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                cursor: noteEditorDragging ? 'grabbing' : 'grab',
+                                userSelect: 'none',
+                              }}
+                              onMouseDown={(e) => {
+                                e.stopPropagation()
+                                if (noteEditorDragging) return
+                                const editingNote = !pendingNotePos ? currentPageNotes.find(n => n.id === editingNoteId) : null
+                                const startNX = pendingNotePos ? pendingNotePos.x : editingNote!.x
+                                const startNY = pendingNotePos ? pendingNotePos.y : editingNote!.y
+                                noteEditorDragRef.current = {
+                                  startClientX: e.clientX,
+                                  startClientY: e.clientY,
+                                  startNX: startNX,
+                                  startNY: startNY,
+                                  currentNX: startNX,
+                                  currentNY: startNY,
+                                  isNew: !!pendingNotePos,
+                                  noteId: editingNoteId ?? undefined,
+                                }
+                                setNoteEditorDragPosition({ x: startNX, y: startNY })
+                                setNoteEditorDragging(true)
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span
+                                  style={{
+                                    width: 14,
+                                    height: 14,
+                                    borderRadius: 3,
+                                    backgroundColor: activeColor,
+                                    border: '1px solid rgba(0,0,0,0.3)',
+                                  }}
+                                />
+                                <span style={{ fontSize: 11, color: '#6b7280' }}>{isNew ? 'New Note' : 'Edit Note'}</span>
+                              </div>
+                              {!isNew && noteIdForDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => { handleNoteDelete(noteIdForDelete!); setEditingNoteId(null) }}
+                                  style={{
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: '#9ca3af',
+                                    cursor: 'pointer',
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              value={editingNoteDraft}
+                              onChange={(e) => setEditingNoteDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  handleNoteSubmit()
+                                }
+                                if (e.key === 'Escape') {
+                                  e.preventDefault()
+                                  handleNoteDismiss()
+                                }
+                              }}
+                              autoFocus
+                              placeholder="Type note text and press Enter"
+                              style={{
+                                marginTop: 6,
+                                fontSize: 15,
+                                padding: '9px 12px',
+                                borderRadius: 6,
+                                border: '1px solid #d1d5db',
+                                outline: 'none',
+                                width: '100%',
+                              }}
+                            />
+                          </div>
+                        )
+                      })()}
+
+                      {/* Notes overlay: HTML so zoom doesn't redraw them; fixed screen size via scale(1/ez) */}
+                      {imageSize.width > 0 && imageSize.height > 0 && currentPageNotes.length > 0 && (
+                        <div
+                          className="viewer-notes-overlay"
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: 0,
+                            width: imageSize.width,
+                            height: imageSize.height,
+                            pointerEvents: 'none',
+                            zIndex: 30,
+                          }}
+                        >
+                          {currentPageNotes.map((note) => {
+                            const pos = noteDraggingId === note.id && noteDragPosition
+                              ? noteDragPosition
+                              : { x: note.x, y: note.y }
+                            return (
+                              <div
+                                key={note.id}
+                                role="button"
+                                tabIndex={0}
+                                style={{
+                                  position: 'absolute',
+                                  left: `${pos.x * 100}%`,
+                                  top: `${pos.y * 100}%`,
+                                  transform: `translate(-50%, -50%) scale(${ez > 0 ? 1 / ez : 1})`,
+                                  transformOrigin: 'center center',
+                                  width: 'max-content',
+                                  maxWidth: 240,
+                                  minHeight: 24,
+                                  padding: '6px 8px',
+                                  boxSizing: 'border-box',
+                                  background: note.color + 'CC',
+                                  border: '2px solid #000',
+                                  borderRadius: 0,
+                                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                                  fontSize: 12,
+                                  color: '#333',
+                                  fontFamily: 'Inter, system-ui, sans-serif',
+                                  overflow: 'hidden',
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  pointerEvents: 'auto',
+                                  cursor: noteDraggingId === note.id ? 'grabbing' : 'grab',
+                                  userSelect: 'none',
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setSelectedNoteId(note.id)
+                                  handleNoteEdit(note.id)
+                                }}
+                                onMouseDown={(e) => {
+                                  if (e.button !== 0) return
+                                  e.stopPropagation()
+                                  noteCardDragRef.current = {
+                                    noteId: note.id,
+                                    startClientX: e.clientX,
+                                    startClientY: e.clientY,
+                                    startNX: note.x,
+                                    startNY: note.y,
+                                    currentNX: note.x,
+                                    currentNY: note.y,
+                                  }
+                                  setNoteDragPosition({ x: note.x, y: note.y })
+                                  setNoteDraggingId(note.id)
+                                }}
+                              >
+                                {note.text || ' '}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
                       {imageSize.width > 0 && imageSize.height > 0 && (
                         <ViewerCanvas
                           key={`canvas-${selectedPage.id}`}
@@ -1228,6 +1847,15 @@ export default function PlanViewerPage() {
                           resetDrawingRef={resetDrawingRef}
                           reopenDrawing={reopenDrawing}
                           onReopenConsumed={() => setReopenDrawing(null)}
+                          noteMode={noteMode}
+                          noteColor={noteColor}
+                          onNoteCreated={handleNoteCreated}
+                          showNoteEditor={!!(pendingNotePos || editingNoteId)}
+                          onDismissNoteEditor={handleNoteDismiss}
+                          onCanvasClick={() => setSelectedNoteId(null)}
+                          onSaveStart={markSaving}
+                          onSaveEnd={markSaved}
+                          onSaveError={markSaveError}
                         />
                       )}
                     </div>
@@ -1270,6 +1898,8 @@ export default function PlanViewerPage() {
             onCancelCalibration={handleCancelCalibration}
             calibrationPixelDist={calibrationPixelDist}
             onCalibrationSaved={handleCalibrationSaved}
+            selectedCountIds={selectedCountIds}
+            onSelectedCountIdsChange={setSelectedCountIds}
             onDetectionsReceived={async (result: AutoDetectResult) => {
               // Refetch definitions and items from the server so the UI shows
               // exactly what was saved (same as after refresh). This fixes
@@ -1390,9 +2020,25 @@ export default function PlanViewerPage() {
               <ul>
                 <li><kbd>Space</kbd> (hold): temporarily enable pan mode</li>
                 <li><kbd>Ctrl/Cmd + Mouse wheel</kbd>: zoom in/out</li>
+                <li><kbd>Ctrl + drag</kbd>: pan the canvas</li>
                 <li><kbd>Fit button</kbd>: reset zoom to fit current sheet</li>
                 <li><kbd>Rotate button</kbd>: rotate sheet 90° clockwise</li>
-                <li><kbd>Pan mode toggle</kbd>: enable drag-to-scroll</li>
+              </ul>
+            </div>
+            <div className="viewer-shortcuts-section">
+              <h4>Notes</h4>
+              <ul>
+                <li><kbd>T</kbd> or <kbd>Ctrl/Cmd + T</kbd>: toggle note mode (press again to close and return to select)</li>
+                <li><kbd>Click</kbd> in note mode: place a colored note</li>
+                <li><kbd>Double‑click</kbd> a note: edit its text</li>
+              </ul>
+            </div>
+            <div className="viewer-shortcuts-section">
+              <h4>Rectangle polygon</h4>
+              <ul>
+                <li><kbd>R</kbd> (with Area & Perimeter active): toggle rectangle mode</li>
+                <li>First <kbd>Click</kbd>: set first corner</li>
+                <li>Second <kbd>Click</kbd>: set opposite corner, creates rectangular polygon</li>
               </ul>
             </div>
             <div className="viewer-shortcuts-section">
@@ -1416,6 +2062,112 @@ export default function PlanViewerPage() {
       >
         <KeyboardIcon size={18} />
       </button>
+
+      {exportPdfModalOpen && planSet?.pages && (
+        <div
+          className="viewer-export-pdf-overlay"
+          onClick={() => !exportPdfLoading && setExportPdfModalOpen(false)}
+        >
+          <div
+            className="viewer-export-pdf-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="viewer-export-pdf-modal-header">
+              <h3>Export PDF</h3>
+              <button
+                type="button"
+                className="viewer-export-pdf-modal-close"
+                onClick={() => !exportPdfLoading && setExportPdfModalOpen(false)}
+                aria-label="Close"
+              >
+                <CloseIcon size={18} />
+              </button>
+            </div>
+            <p className="viewer-export-pdf-modal-hint">Select which pages to include in the PDF.</p>
+            <label className="viewer-export-pdf-filter-label">
+              <input
+                type="checkbox"
+                checked={exportPdfFilterWithContentOnly}
+                onChange={(e) => setExportPdfFilterWithContentOnly(e.target.checked)}
+              />
+              Only show pages with counts or notes
+            </label>
+            <div className="viewer-export-pdf-page-list">
+              {(exportPdfFilterWithContentOnly
+                ? planSet.pages.filter((p) => pageHasCountsOrNotes(p.id))
+                : planSet.pages
+              )
+                .sort((a, b) => a.page_number - b.page_number)
+                .map((p) => (
+                  <label key={p.id} className="viewer-export-pdf-page-row">
+                    <input
+                      type="checkbox"
+                      checked={exportPdfSelectedPageIds.has(p.id)}
+                      onChange={(e) => {
+                        setExportPdfSelectedPageIds((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(p.id)
+                          else next.delete(p.id)
+                          return next
+                        })
+                      }}
+                    />
+                    <span>{p.title || `Sheet ${p.page_number}`}</span>
+                    {(exportPdfAllCountItems.some((i) => i.page === p.id) || (notes.get(p.id)?.length ?? 0) > 0) && (
+                      <span className="viewer-export-pdf-page-badge">has content</span>
+                    )}
+                  </label>
+                ))}
+            </div>
+            {planSet.pages.length > 0 && (
+              <div className="viewer-export-pdf-actions">
+                <button
+                  type="button"
+                  className="viewer-export-pdf-btn-inline"
+                  onClick={() =>
+                    setExportPdfSelectedPageIds(
+                      new Set(
+                        (exportPdfFilterWithContentOnly
+                          ? planSet.pages.filter((p) => pageHasCountsOrNotes(p.id))
+                          : planSet.pages
+                        ).map((p) => p.id)
+                      )
+                    )
+                  }
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  className="viewer-export-pdf-btn-inline"
+                  onClick={() => setExportPdfSelectedPageIds(new Set())}
+                >
+                  Deselect all
+                </button>
+              </div>
+            )}
+            <div className="viewer-export-pdf-modal-footer">
+              <button
+                type="button"
+                className="viewer-export-pdf-btn-inline"
+                onClick={() => !exportPdfLoading && setExportPdfModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="viewer-export-pdf-export-btn"
+                disabled={exportPdfLoading || exportPdfSelectedPageIds.size === 0}
+                onClick={() => handleExportPdf(Array.from(exportPdfSelectedPageIds))}
+              >
+                {exportPdfLoading && exportPdfProgress
+                  ? `Exporting ${exportPdfProgress.current}/${exportPdfProgress.total}…`
+                  : `Export ${exportPdfSelectedPageIds.size} page(s)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {excelModalOpen && (
         <ExcelPreviewModal

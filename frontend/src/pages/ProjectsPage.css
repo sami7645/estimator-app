@@ -347,12 +347,26 @@
 }
 
 .form-group input[type="text"],
+.form-group input[type="email"],
 .form-group input[type="file"],
 .form-group select {
   width: 100%;
   padding: 0.5rem;
   border: 1px solid #d1d5db;
   border-radius: 6px;
+  font-size: 0.95rem;
+  color: #111827;
+  background: #ffffff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.form-group input[type="text"]:focus,
+.form-group input[type="email"]:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+.form-group input::placeholder {
+  color: #9ca3af;
 }
 
 .form-group select {
@@ -540,7 +554,8 @@
 
 .projects-page {
   position: relative;
-  height: 100%;
+  /* Fill the viewport so inner layout can scroll vertically */
+  height: 100vh;
   padding: 0;
   background: #f5f5f7;
   color: #111827;
@@ -569,14 +584,40 @@
 .projects-sidebar-glass {
   display: flex;
   flex-direction: column;
-  padding: 0.75rem 0.85rem;
+  /* Extra bottom space so the last 1–2 rows are fully above the OS taskbar at 100% zoom */
+  padding: 0.75rem 0.85rem 4rem;
   border-radius: 0;
   background: #ffffff;
   border: none;
   border-right: 1px solid #e5e7eb;
   box-shadow: none;
   height: 100%;
-  overflow-y: auto;
+  /* Sidebar header stays fixed; scroll happens inside the project tree */
+  overflow-y: hidden;
+  box-sizing: border-box;
+}
+
+.projects-sidebar-glass {
+  /* Slim, minimalist scrollbar for the whole sidebar */
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.projects-sidebar-glass::-webkit-scrollbar {
+  width: 6px;
+}
+
+.projects-sidebar-glass::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.projects-sidebar-glass::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 999px;
+}
+
+.projects-sidebar-glass::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
 }
 
 .projects-sidebar-filters {
@@ -586,6 +627,11 @@
   padding-bottom: 0.5rem;
   border-bottom: 1px solid #e5e7eb;
   width: 100%;
+  /* Sticky header: stays at top while projects list scrolls */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #ffffff;
 }
 
 .projects-sidebar-filter-btn {
@@ -624,6 +670,32 @@
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Slim, minimalist scrollbar just for the left sidebar tree list */
+.projects-tree {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.projects-tree::-webkit-scrollbar {
+  width: 6px;
+}
+
+.projects-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.projects-tree::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 999px;
+}
+
+.projects-tree::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
 }
 
 .projects-tree-empty {
@@ -765,6 +837,76 @@
   flex-direction: column;
   gap: 0;
   padding: 0.75rem;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Only the list/grid content scrolls; toolbar stays fixed */
+.projects-content-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Outer canvas; vertical scrolling happens inside the white list card or grid wrapper */
+  overflow-y: hidden;
+  overflow-x: hidden;
+  /* Grey space under the card so its rounded bottom is always visible at 100% zoom */
+  padding-bottom: 4rem;
+}
+
+/* Grid view: scroll inside the grid wrapper so the card header/filters stay fixed */
+.projects-grid-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.projects-grid-scroll {
+  /* Slim, minimalist scrollbar for grid view */
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.projects-grid-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.projects-grid-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.projects-grid-scroll::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 999px;
+}
+
+.projects-grid-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
+}
+
+/* Slim, minimalist scrollbar for the projects list area */
+.projects-content-scroll {
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.projects-content-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.projects-content-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.projects-content-scroll::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 999px;
+}
+
+.projects-content-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
 }
 
 
@@ -877,21 +1019,125 @@
 
 .projects-toolbar-glass {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 999px;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 12px;
   background: #ffffff;
   border: 1px solid #e5e7eb;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
-  flex-wrap: wrap;
   position: relative;
 }
 
-.projects-toolbar-glass::after {
-  content: '';
+.projects-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.projects-toolbar-top .search-input-wrapper {
   flex: 1;
   min-width: 0;
+  max-width: 320px;
+}
+
+.projects-toolbar-main-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.projects-toolbar-filters-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.projects-filter-customize {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.projects-filter-config-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #6b7280;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.projects-filter-config-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+  color: #111827;
+}
+
+.projects-filter-config-menu {
+  position: absolute;
+  top: 110%;
+  right: 0;
+  min-width: 200px;
+  background: #ffffff;
+  border-radius: 0.75rem;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+  border: 1px solid #e5e7eb;
+  padding: 0.5rem 0.75rem;
+  z-index: 20;
+}
+
+.projects-filter-config-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+  font-size: 0.78rem;
+}
+
+.projects-filter-config-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.projects-filter-config-row input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+}
+
+.projects-filter-config-arrows {
+  display: inline-flex;
+  gap: 0.15rem;
+}
+
+.projects-filter-config-arrows button {
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  border-radius: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 0.7rem;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.projects-filter-config-arrows button:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .search-input {
@@ -1101,32 +1347,62 @@
   z-index: 1000;
 }
 
-.modal-content {
+/* Edit project modal container – improved design */
+.modal-overlay {
+  background: rgba(15, 23, 42, 0.4);
+  backdrop-filter: blur(4px);
+}
+.modal-content.glass-card {
   max-width: 520px;
   width: 92%;
   max-height: 90vh;
-  padding: 1.75rem 1.75rem 1.5rem;
+  padding: 2rem 2rem 1.75rem;
   overflow-y: auto;
   background: #ffffff;
   border-radius: 1rem;
   border: 1px solid #e5e7eb;
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
 }
 
-.modal-content h2 {
-  margin: 0 0 1.25rem;
-  font-size: 1.2rem;
+.modal-content.glass-card h2 {
+  margin: 0 0 1.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
   color: #111827;
+  letter-spacing: -0.02em;
 }
 
-.form-group {
-  margin-bottom: 1rem;
+.modal-content .form-group {
+  margin-bottom: 1.1rem;
   font-size: 0.9rem;
 }
 
-.form-group label {
+.modal-content .form-group label {
   display: block;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+.modal-content .form-group input[type="text"],
+.modal-content .form-group input[type="email"] {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  color: #111827;
+  background: #ffffff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.modal-content .form-group input[type="text"]:focus,
+.modal-content .form-group input[type="email"]:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+.modal-content .form-group input::placeholder {
+  color: #9ca3af;
 }
 
 .form-group-inline {
@@ -1184,12 +1460,15 @@
   border-radius: 0.75rem;
   border: 1px solid #e5e7eb;
   background: #ffffff;
-  overflow-x: auto;
-  overflow-y: visible;
+  /* Card container; rows scroll inside body so header stays fixed */
+  overflow: hidden;
+  /* No extra padding at bottom; spacing is handled by the outer scroll container */
+  padding-bottom: 0;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
   display: flex;
   flex-direction: column;
   min-width: 0;
+  box-sizing: border-box;
 }
 
 .projects-list-header {
@@ -1205,10 +1484,55 @@
   align-items: center;
 }
 
+.projects-list-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+/* Slim scrollbar for rows inside the list card */
+.projects-list-body {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.projects-list-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.projects-list-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.projects-list-body::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 999px;
+}
+
+.projects-list-body::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
+}
+
 .projects-list-header > * {
   display: flex;
   align-items: center;
   min-width: 0;
+  cursor: grab;
+  user-select: none;
+}
+
+.projects-list-header > *:active {
+  cursor: grabbing;
+}
+
+.projects-list-header .projects-list-pin-btn,
+.projects-list-header .projects-list-move-first-btn {
+  cursor: pointer;
+}
+
+.projects-list-col-dragging {
+  opacity: 0.7;
 }
 
 .projects-list-row {
@@ -1274,6 +1598,71 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 0.35rem;
+}
+
+/* Pinned column stays visible when list is scrolled horizontally (e.g. trackpad or Ctrl+scroll) */
+.projects-list-col-pinned {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  /* Very subtle divider so it feels consistent with other cells */
+  box-shadow: 1px 0 0 rgba(15, 23, 42, 0.05);
+}
+
+.projects-list-header .projects-list-col-pinned {
+  background: #f9fafb;
+}
+
+.projects-list-row .projects-list-col-pinned {
+  /* Let the row background show through so it matches other columns */
+  background: transparent;
+}
+
+.projects-list-row:hover .projects-list-col-pinned {
+  background: transparent;
+}
+
+.projects-list-pin-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.projects-list-pin-btn:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.projects-list-pin-btn .pinned {
+  color: #3b82f6;
+}
+
+.projects-list-move-first-btn {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fff;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.projects-list-move-first-btn:hover {
+  background: #f3f4f6;
+  color: #374151;
 }
 
 .projects-list-project-name {
@@ -1390,4 +1779,61 @@
   color: #6b7280;
   font-size: 0.7rem;
   font-weight: 500;
+}
+
+/* ─── Email subfolder styles ─── */
+
+.projects-tree-email-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #4b5563;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.35rem 0.4rem 0.2rem;
+  margin-top: 0.15rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.projects-tree-email-list {
+  border-top: 1px dashed #e5e7eb;
+  margin-top: 0.2rem;
+  padding-top: 0.2rem;
+}
+
+.projects-tree-email-group {
+  margin-bottom: 0.15rem;
+}
+
+.projects-tree-email-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #6b7280;
+  padding: 0.15rem 0 0.1rem 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.projects-tree-email-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: #374151;
+  padding: 0.2rem 0.4rem 0.2rem 1.2rem;
+  cursor: default;
+}
+
+.projects-tree-email-item svg {
+  flex-shrink: 0;
+  color: #9ca3af;
+}
+
+.projects-tree-email-empty {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  font-style: italic;
+  padding: 0.15rem 0.4rem 0.15rem 1.2rem;
 }

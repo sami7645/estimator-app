@@ -16,6 +16,7 @@ from .models import (
     PrivacyAgreement,
     TradeDataset,
     DatasetImage,
+    ProjectEmail,
 )
 
 User = get_user_model()
@@ -171,6 +172,13 @@ class TradeDatasetSerializer(serializers.ModelSerializer):
             trade=obj.trade,
             plan_page__plan_set__project__owner=obj.owner,
         ).count()
+
+
+class ProjectEmailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectEmail
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")
 
 
 class UserSearchSerializer(serializers.ModelSerializer):

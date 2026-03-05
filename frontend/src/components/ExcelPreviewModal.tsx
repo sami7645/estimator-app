@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import * as XLSXStyle from 'xlsx-js-style'
 import { X, Download, Pencil, Undo2, Redo2, Bold } from 'lucide-react'
+import type { ExcelPricePreset } from '../api'
 import './ExcelPreviewModal.css'
 
 type SheetData = { name: string; data: (string | number)[][] }
@@ -10,7 +11,7 @@ type CellStyle = { bold?: boolean; color?: string }
 interface ExcelPreviewModalProps {
   planSetId: number
   onClose: () => void
-  exportCountsExcel: (planSetId?: number) => Promise<Blob>
+  exportCountsExcel: (planSetId?: number, pricePreset?: ExcelPricePreset) => Promise<Blob>
 }
 
 function sheetToMatrix(ws: XLSX.WorkSheet): (string | number)[][] {
@@ -61,7 +62,11 @@ function matrixToSheetWithStyle(data: (string | number)[][], styleMap?: CellStyl
     })
   })
   const range = { s: { r: 0, c: 0 }, e: { r: data.length - 1, c: Math.max(0, maxC - 1) } }
-  ws['!ref'] = XLSX.utils.encode_range(range)
+  const ref = XLSX.utils.encode_range(range)
+  ws['!ref'] = ref
+  // Enable Excel's built‑in column filters on the header row so users
+  // can filter by metrics like Total SF, Total Each, Linear Ft, Final Price.
+  ws['!autofilter'] = { ref }
   return ws
 }
 
@@ -75,6 +80,11 @@ export default function ExcelPreviewModal({ planSetId, onClose, exportCountsExce
   const [redoStack, setRedoStack] = useState<SheetData[][]>([])
   const [cellStyles, setCellStyles] = useState<Record<string, CellStyle[][]>>({})
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set())
+  const [pricePerEach, setPricePerEach] = useState('')
+  const [pricePerSqft, setPricePerSqft] = useState('')
+  const [pricePerPerimeterFt, setPricePerPerimeterFt] = useState('')
+  const [pricePerLinearFt, setPricePerLinearFt] = useState('')
+  const [applyingPrices, setApplyingPrices] = useState(false)
   const selectAnchorRef = useRef<{ r: number; c: number } | null>(null)
   const isSelectingRef = useRef(false)
   const savedSelectionRef = useRef<{ range: Range; sel: Selection } | null>(null)
@@ -114,25 +124,29 @@ export default function ExcelPreviewModal({ planSetId, onClose, exportCountsExce
     })
   }, [])
 
+  const loadExcel = useCallback(
+    (preset?: ExcelPricePreset) => {
+      return exportCountsExcel(planSetId, preset)
+        .then((blob) => blob.arrayBuffer())
+        .then((buf) => {
+          if (!buf) return
+          const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+          const list: SheetData[] = wb.SheetNames.map((name) => ({
+            name,
+            data: sheetToMatrix(wb.Sheets[name]),
+          }))
+          setSheets(list)
+          setActiveIndex(0)
+        })
+    },
+    [planSetId, exportCountsExcel]
+  )
+
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    exportCountsExcel(planSetId)
-      .then((blob) => {
-        if (cancelled) return
-        return blob.arrayBuffer()
-      })
-      .then((buf) => {
-        if (cancelled || !buf) return
-        const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
-        const list: SheetData[] = wb.SheetNames.map((name) => ({
-          name,
-          data: sheetToMatrix(wb.Sheets[name]),
-        }))
-        setSheets(list)
-        setActiveIndex(0)
-      })
+    loadExcel()
       .catch((e) => {
         if (!cancelled) setError(e?.message || 'Failed to load Excel')
       })
@@ -140,7 +154,29 @@ export default function ExcelPreviewModal({ planSetId, onClose, exportCountsExce
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [planSetId, exportCountsExcel])
+  }, [loadExcel])
+
+  async function handleApplyPrices() {
+    const preset: ExcelPricePreset = {}
+    const each = parseFloat(pricePerEach)
+    const sqft = parseFloat(pricePerSqft)
+    const perim = parseFloat(pricePerPerimeterFt)
+    const linear = parseFloat(pricePerLinearFt)
+    if (!Number.isNaN(each)) preset.pricePerEach = each
+    if (!Number.isNaN(sqft)) preset.pricePerSqft = sqft
+    if (!Number.isNaN(perim)) preset.pricePerPerimeterFt = perim
+    if (!Number.isNaN(linear)) preset.pricePerLinearFt = linear
+    if (Object.keys(preset).length === 0) return
+    setApplyingPrices(true)
+    setError(null)
+    try {
+      await loadExcel(preset)
+    } catch (e) {
+      setError(e?.message || 'Failed to apply prices')
+    } finally {
+      setApplyingPrices(false)
+    }
+  }
 
   useEffect(() => {
     if (!editMode) return
@@ -421,6 +457,62 @@ export default function ExcelPreviewModal({ planSetId, onClose, exportCountsExce
           </div>
           <button type="button" className="excel-modal-close" onClick={onClose} aria-label="Close">
             <X size={20} />
+          </button>
+        </div>
+
+        <div className="excel-price-preset-row">
+          <span className="excel-price-preset-label">Price preset (optional):</span>
+          <label>
+            <span>Each ($)</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={pricePerEach}
+              onChange={(e) => setPricePerEach(e.target.value)}
+              placeholder="—"
+            />
+          </label>
+          <label>
+            <span>Area / sqft ($)</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={pricePerSqft}
+              onChange={(e) => setPricePerSqft(e.target.value)}
+              placeholder="—"
+            />
+          </label>
+          <label>
+            <span>Perimeter (ft) ($)</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={pricePerPerimeterFt}
+              onChange={(e) => setPricePerPerimeterFt(e.target.value)}
+              placeholder="—"
+            />
+          </label>
+          <label>
+            <span>Linear ft ($)</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={pricePerLinearFt}
+              onChange={(e) => setPricePerLinearFt(e.target.value)}
+              placeholder="—"
+            />
+          </label>
+          <button
+            type="button"
+            className="excel-modal-btn excel-apply-prices-btn"
+            onClick={handleApplyPrices}
+            disabled={applyingPrices || (!pricePerEach && !pricePerSqft && !pricePerPerimeterFt && !pricePerLinearFt)}
+          >
+            {applyingPrices ? 'Applying…' : 'Apply prices'}
           </button>
         </div>
 

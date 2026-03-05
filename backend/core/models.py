@@ -25,11 +25,43 @@ class Project(TimeStampedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     client_name = models.CharField(max_length=255, blank=True)
+    estimating_email = models.EmailField(blank=True)
     is_starred = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
 
     def __str__(self) -> str:
         return self.name
+
+
+class EmailCategory(models.TextChoices):
+    INVITE = "invite", "Bid Invitation"
+    CHANGE = "change", "Change / Addendum"
+    GENERAL = "general", "General"
+
+
+class ProjectEmail(TimeStampedModel):
+    """
+    Email message linked to a project, categorised by ML as an invite,
+    change order, or general correspondence.
+    """
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="emails")
+    subject = models.CharField(max_length=500, blank=True)
+    sender = models.EmailField(blank=True)
+    body_preview = models.TextField(blank=True)
+    category = models.CharField(
+        max_length=16,
+        choices=EmailCategory.choices,
+        default=EmailCategory.GENERAL,
+    )
+    received_at = models.DateTimeField(null=True, blank=True)
+    is_read = models.BooleanField(default=False)
+    raw_headers = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-received_at"]
+
+    def __str__(self) -> str:
+        return f"[{self.get_category_display()}] {self.subject[:60]}"
 
 
 class Trade(models.TextChoices):

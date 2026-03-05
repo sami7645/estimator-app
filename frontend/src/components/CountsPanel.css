@@ -164,6 +164,12 @@
   padding-left: calc(0.75rem - 3px);
 }
 
+.count-row.multi-selected:not(.active) {
+  background: #f0f9ff;
+  border-left: 3px solid #93c5fd;
+  padding-left: calc(0.75rem - 3px);
+}
+
 .count-row.hidden-count {
   /* Eye icon already indicates hidden state - no need to fade the row */
 }

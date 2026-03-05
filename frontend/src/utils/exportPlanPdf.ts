@@ -156,17 +156,23 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 export type ExportPlanPdfOptions = {
   planSet: PlanSet
   pages: PlanPage[]
+  /** If provided, only these page IDs are exported (order preserved by page_number). */
+  pageIds?: number[]
   countDefinitions: CountDefinition[]
   getCountItemsForPage: (pageId: number) => Promise<CountItem[]>
   onProgress?: (current: number, total: number) => void
 }
 
 export async function exportPlanAsPdf(options: ExportPlanPdfOptions): Promise<void> {
-  const { planSet, pages, countDefinitions, getCountItemsForPage, onProgress } = options
+  const { planSet, pages, pageIds, countDefinitions, getCountItemsForPage, onProgress } = options
   const { jsPDF } = await import('jspdf')
 
   const defMap = new Map(countDefinitions.map((d) => [d.id, d]))
-  const sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number)
+  let sortedPages = [...pages].sort((a, b) => a.page_number - b.page_number)
+  if (pageIds && pageIds.length > 0) {
+    const idSet = new Set(pageIds)
+    sortedPages = sortedPages.filter((p) => idSet.has(p.id))
+  }
   // We'll create the jsPDF instance after we know the first image size.
   // Each PDF page will be sized to the image aspect ratio with no margins,
   // and scaled to a reasonable physical size so viewers don't appear over‑zoomed.

@@ -35,6 +35,15 @@ interface ViewerCanvasProps {
   resetDrawingRef?: React.MutableRefObject<(() => void) | null>
   reopenDrawing?: { type: 'drawing_polyline' | 'drawing_polygon'; vertices: number[][]; redoStack?: number[][] } | null
   onReopenConsumed?: () => void
+  noteMode?: boolean
+  noteColor?: string
+  onNoteCreated?: (x: number, y: number) => void
+  showNoteEditor?: boolean
+  onDismissNoteEditor?: () => void
+  onCanvasClick?: () => void
+  onSaveStart?: () => void
+  onSaveEnd?: () => void
+  onSaveError?: () => void
 }
 
 type DrawingState =
@@ -42,6 +51,7 @@ type DrawingState =
   | { type: 'drawing_polyline'; vertices: number[][] }
   | { type: 'drawing_polygon'; vertices: number[][] }
   | { type: 'drawing_rect'; start: [number, number] }
+  | { type: 'drawing_rect_polygon'; start: [number, number] }
 
 /* ═══════════════════════════════════════════════════════════
  *  CONSTANTS  —  all in CSS-screen-pixels
@@ -56,7 +66,7 @@ const DBL_PX = 14
 const SEL_COLOR = '#2563eb' // Bright blue selection highlight (visible on any bg)
 
 const S = {
-  marker:       20,     // marker icon size
+  marker:       25,    // marker size in screen px (through sz()) so it looks the same on all resolutions
   vert:         6,      // vertex handle radius
   vertHover:    9,      // vertex handle radius on hover
   lineW:        2,      // polyline stroke (matches drawing preview feel)
@@ -67,9 +77,9 @@ const S = {
   crossGap:     5,      // crosshair center gap
   dashOn:       10,
   dashOff:      5,
-  font:         12,     // measurement label font
-  fontSm:       10,     // segment label font
-  pad:          5,      // label padding
+  font:         12,     // measurement label font (screen px, through sz())
+  fontSm:       10,     // segment label font (screen px, through sz())
+  pad:          3,      // label padding (screen px, through sz())
   calDot:       7,      // calibration endpoint dot
 }
 
@@ -125,7 +135,51 @@ export default function ViewerCanvas({
   resetDrawingRef,
   reopenDrawing,
   onReopenConsumed,
+  noteMode,
+  noteColor,
+  onNoteCreated,
+  showNoteEditor,
+  onDismissNoteEditor,
+  onCanvasClick,
+  onSaveStart,
+  onSaveEnd,
+  onSaveError,
 }: ViewerCanvasProps) {
+
+  async function trackedCreate(data: Parameters<typeof createCountItem>[0]) {
+    onSaveStart?.()
+    try {
+      const result = await createCountItem(data)  // raw call inside wrapper
+      onSaveEnd?.()
+      return result
+    } catch (err) {
+      onSaveError?.()
+      throw err
+    }
+  }
+
+  async function trackedUpdate(id: number, data: Parameters<typeof updateCountItem>[1]) {
+    onSaveStart?.()
+    try {
+      const result = await updateCountItem(id, data)  // raw call inside wrapper
+      onSaveEnd?.()
+      return result
+    } catch (err) {
+      onSaveError?.()
+      throw err
+    }
+  }
+
+  async function trackedDelete(id: number) {
+    onSaveStart?.()
+    try {
+      await deleteCountItem(id)
+      onSaveEnd?.()
+    } catch (err) {
+      onSaveError?.()
+      throw err
+    }
+  }
 
   /* ─── State ─── */
 
@@ -137,6 +191,7 @@ export default function ViewerCanvas({
   const [cPressed, setCPressed] = useState(false)
   const [spacePressed, setSpacePressed] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [rectPolygonMode, setRectPolygonMode] = useState(false)
   const clipboardRef = useRef<CountItem | null>(null)
   const stageRef = useRef<any>(null)
   const lastClickTimeRef = useRef(0)
@@ -237,8 +292,18 @@ export default function ViewerCanvas({
   /* ─── Derived ─── */
 
   const activeCount = countDefinitions.find((d) => d.id === activeCountId)
-  const isDrawingMode = !isCalibrating && showCounts && activeCount != null && !panMode && !spacePressed
-  const showCrosshair = isDrawingMode && activeCount!.count_type !== 'each'
+  const isDrawingMode = !isCalibrating && showCounts && activeCount != null && !panMode && !spacePressed && !noteMode
+  const isLineOrPolygonTool = activeCount && (activeCount.count_type === 'linear_feet' || activeCount.count_type === 'area_perimeter')
+  const showCrosshair = isDrawingMode && activeCount && activeCount.count_type !== 'each' &&
+    (drawingState.type === 'drawing_polyline' || drawingState.type === 'drawing_polygon' || drawingState.type === 'drawing_rect_polygon' ||
+      (drawingState.type === 'idle' && isLineOrPolygonTool))
+
+  // Reset rectPolygonMode when switching away from area_perimeter
+  useEffect(() => {
+    if (!activeCount || activeCount.count_type !== 'area_perimeter') {
+      setRectPolygonMode(false)
+    }
+  }, [activeCount?.id, activeCount?.count_type])
 
   /**
    * sz(N) → canvas-space pixels so the element looks exactly N screen-px
@@ -385,8 +450,7 @@ export default function ViewerCanvas({
     }
 
     try {
-      // Update server first - but IGNORE the geometry in the response, use our calculated one
-      const u = await updateCountItem(itemId, updates)
+      const u = await trackedUpdate(itemId, updates)
       
       // CRITICAL: Create finalItem using our calculated geometry, NOT the server response geometry
       // The server might return stale geometry, so we ALWAYS use movedGeom
@@ -507,7 +571,7 @@ export default function ViewerCanvas({
                 base.perimeter_ft = calcPerimeter(newGeom)
               }
             }
-            const item = await createCountItem(base as any)
+            const item = await trackedCreate(base as any)
             onCountItemCreated(item)
             setSelectedItemId(item.id)
             console.log('Pasted item:', item.id)
@@ -582,6 +646,11 @@ export default function ViewerCanvas({
         } else if (selectedItemId) {
           void deleteItem(selectedItemId)
         }
+      } else if (e.key === 'r' || e.key === 'R') {
+        if (!e.ctrlKey && !e.metaKey && activeCount?.count_type === 'area_perimeter') {
+          e.preventDefault()
+          setRectPolygonMode(prev => !prev)
+        }
       } else if (e.key === ' ') {
         e.preventDefault()
         setSpacePressed(true)
@@ -590,10 +659,9 @@ export default function ViewerCanvas({
       } else if (
         drawingState.type === 'idle' &&
         !isDragging &&
-        selectedItemId != null &&
         ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)
       ) {
-        // Nudge selected item with arrow keys
+        // Nudge selected count item or note with arrow keys
         e.preventDefault()
         const stepScreen = e.shiftKey ? 10 : 2
         const delta = sz(stepScreen)
@@ -603,7 +671,10 @@ export default function ViewerCanvas({
         else if (e.key === 'ArrowRight') dx = delta
         else if (e.key === 'ArrowUp') dy = -delta
         else if (e.key === 'ArrowDown') dy = delta
-        void offsetItemGeometry(selectedItemId, dx, dy)
+
+        if (selectedItemId != null) {
+          void offsetItemGeometry(selectedItemId, dx, dy)
+        }
       }
     }
     function onUp(e: KeyboardEvent) {
@@ -620,7 +691,7 @@ export default function ViewerCanvas({
    * ═══════════════════════════════════════════════════════════ */
 
   async function deleteItem(id: number) {
-    try { await deleteCountItem(id); onCountItemDeleted(id) }
+    try { await trackedDelete(id); onCountItemDeleted(id) }
     catch (err) { console.error('Delete failed:', err) }
     setSelectedItemId(null); setSelectedVertex(null)
   }
@@ -650,7 +721,7 @@ export default function ViewerCanvas({
         updates.perimeter_ft = null
       }
     }
-    try { const u = await updateCountItem(itemId, updates); onCountItemUpdated(u) }
+    try { const u = await trackedUpdate(itemId, updates); onCountItemUpdated(u) }
     catch (err) { console.error('Remove vertex failed:', err) }
     setSelectedVertex(null)
   }
@@ -658,7 +729,7 @@ export default function ViewerCanvas({
   async function finishPolyline(verts: number[][], isRedoRestore?: boolean) {
     if (verts.length >= 2 && activeCount) {
       try {
-        const item = await createCountItem({
+        const item = await trackedCreate({
           count_definition: activeCount.id, page: pageId,
           geometry_type: 'polyline', geometry: verts,
           length_ft: isCalibrated ? calcLength(verts) : null,
@@ -674,7 +745,7 @@ export default function ViewerCanvas({
     if (verts.length >= 3 && activeCount) {
       const closed = [...verts, verts[0]]
       try {
-        const item = await createCountItem({
+        const item = await trackedCreate({
           count_definition: activeCount.id, page: pageId,
           geometry_type: 'polygon', geometry: closed,
           area_sqft: isCalibrated ? calcArea(closed) : null,
@@ -694,9 +765,29 @@ export default function ViewerCanvas({
   function handleStageMouseDown(e: any) {
     if (e.evt.button !== 0) return
     if (panMode || spacePressed) return
+    // Let Ctrl/Cmd + drag be handled by parent for pan (even when a count is selected).
+    if (e.evt.ctrlKey || e.evt.metaKey) return
 
     const pos = getCanvasPointer(e.evt)
     if (!pos) return
+
+    // Note editor open: click on empty canvas dismisses it (don't create another note)
+    if (showNoteEditor && e.target === e.target.getStage()) {
+      onDismissNoteEditor?.()
+      return
+    }
+
+    // Note mode: place a note on click
+    if (noteMode) {
+      const [nx, ny] = norm(pos.x, pos.y)
+      onNoteCreated?.(nx, ny)
+      return
+    }
+
+    // Click on empty canvas: notify parent (e.g. deselect note)
+    if (e.target === e.target.getStage()) {
+      onCanvasClick?.()
+    }
 
     // Calibration mode
     if (isCalibrating) {
@@ -722,8 +813,6 @@ export default function ViewerCanvas({
     lastClickPosRef.current = pos
 
     if (isDouble) {
-      // Double-click finishes the shape, keeping all vertices including
-      // the one placed by the first click of the double-click sequence.
       if (drawingState.type === 'drawing_polyline') {
         void finishPolyline(drawingState.vertices)
       } else if (drawingState.type === 'drawing_polygon') {
@@ -732,11 +821,46 @@ export default function ViewerCanvas({
       return
     }
 
-    // "Each" type: all shapes support drag-to-draw
+    // "Each" type: always place a fixed-size point marker (no drag-to-resize)
     if (activeCount.count_type === 'each' && drawingState.type === 'idle') {
       const [nx, ny] = norm(pos.x, pos.y)
-      setDrawingState({ type: 'drawing_rect', start: [nx, ny] })
+      void (async () => {
+        try {
+          const item = await trackedCreate({
+            count_definition: activeCount.id, page: pageId,
+            geometry_type: 'point', geometry: [[nx, ny]],
+          })
+          onCountItemCreated(item)
+        } catch (err) { console.error('Create marker failed:', err) }
+      })()
       return
+    }
+
+    // Rectangle polygon mode (R shortcut): 2-click rectangle for area_perimeter
+    if (rectPolygonMode && activeCount.count_type === 'area_perimeter') {
+      const [nx, ny] = norm(pos.x, pos.y)
+      if (drawingState.type === 'idle') {
+        setDrawingState({ type: 'drawing_rect_polygon', start: [nx, ny] })
+        return
+      } else if (drawingState.type === 'drawing_rect_polygon') {
+        const [sx, sy] = drawingState.start
+        const vertices: number[][] = [
+          [sx, sy], [nx, sy], [nx, ny], [sx, ny], [sx, sy]
+        ]
+        void (async () => {
+          try {
+            const item = await trackedCreate({
+              count_definition: activeCount.id, page: pageId,
+              geometry_type: 'polygon', geometry: vertices,
+              area_sqft: isCalibrated ? calcArea(vertices) : null,
+              perimeter_ft: isCalibrated ? calcPerimeter(vertices) : null,
+            })
+            onCountItemCreated(item)
+          } catch (err) { console.error('Create rect polygon failed:', err) }
+        })()
+        setDrawingState({ type: 'idle' })
+        return
+      }
     }
 
     handleClick(pos)
@@ -755,18 +879,17 @@ export default function ViewerCanvas({
     if (dist(dsx, dsy, pos.x, pos.y) < minDrag) {
       // Quick click: place a point marker (small, consistent size)
       try {
-        const item = await createCountItem({
+        const item = await trackedCreate({
           count_definition: activeCount.id, page: pageId,
           geometry_type: 'point', geometry: [[sx, sy]],
         })
         onCountItemCreated(item)
       } catch (err) { console.error('Create marker failed:', err) }
     } else {
-      // Drag: create a shape matching the count definition's shape
       const shapeMap: Record<string, CountItem['geometry_type']> = { circle: 'circle', triangle: 'triangle', square: 'rect' }
       const geoType: CountItem['geometry_type'] = shapeMap[activeCount.shape || 'square'] || 'rect'
       try {
-        const item = await createCountItem({
+        const item = await trackedCreate({
           count_definition: activeCount.id, page: pageId,
           geometry_type: geoType, geometry: [[sx, sy], [ex, ey]],
         })
@@ -836,7 +959,7 @@ export default function ViewerCanvas({
         updates.perimeter_ft = null
       }
     }
-    try { const u = await updateCountItem(itemId, updates); onCountItemUpdated(u) }
+    try { const u = await trackedUpdate(itemId, updates); onCountItemUpdated(u) }
     catch (err) { console.error('Vertex drag failed:', err) }
   }
 
@@ -852,6 +975,7 @@ export default function ViewerCanvas({
 
   const cursorStyle =
     panMode || spacePressed ? 'grab'
+    : noteMode ? 'crosshair'
     : isCalibrating ? 'crosshair'
     : isDrawingMode ? (activeCount!.count_type === 'each' ? 'crosshair' : 'none')
     : 'default'
@@ -902,30 +1026,47 @@ export default function ViewerCanvas({
    * ═══════════════════════════════════════════════════════════ */
 
   function renderTag(
-    text: string, cx: number, cy: number,
-    bg = 'rgba(0,0,0,0.72)', fg = '#ffffff',
-    fontSize = S.font, offsetY = 0,
+    text: string,
+    cx: number,
+    cy: number,
+    bg = 'rgba(0,0,0,0.72)',
+    fg = '#ffffff',
+    fontSize = S.font,
+    offsetY = 0,
   ) {
+    // Use sz() so labels stay a consistent size on screen,
+    // even when you zoom the plan way in or out.
     const fs = sz(fontSize)
-    const px = sz(S.pad + 2)
-    const py = sz(S.pad)
+    const padX = sz(S.pad + 2)
+    const padY = sz(S.pad)
     const charW = fs * 0.62
     const tw = text.length * charW
-    const bw = tw + px * 2
-    const bh = fs + py * 2
+    const bw = tw + padX * 2
+    const bh = fs + padY * 2
     const dy = sz(offsetY)
     return (
-      <Group x={cx} y={cy + dy} rotation={-rotation} listening={false}
-        key={`tag-${text}-${cx.toFixed(0)}-${cy.toFixed(0)}`}>
+      <Group
+        x={cx}
+        y={cy + dy}
+        rotation={-rotation}
+        listening={false}
+        key={`tag-${text}-${cx.toFixed(0)}-${cy.toFixed(0)}`}
+      >
         <Rect
-          x={-bw / 2} y={-bh / 2}
-          width={bw} height={bh}
-          fill={bg} cornerRadius={sz(4)}
+          x={-bw / 2}
+          y={-bh / 2}
+          width={bw}
+          height={bh}
+          fill={bg}
+          cornerRadius={4}
         />
         <Text
-          x={-tw / 2} y={-fs / 2}
-          text={text} fontSize={fs}
-          fill={fg} fontStyle="bold"
+          x={-tw / 2}
+          y={-fs / 2}
+          text={text}
+          fontSize={fs}
+          fill={fg}
+          fontStyle="bold"
           fontFamily="Inter, system-ui, -apple-system, sans-serif"
         />
       </Group>
@@ -944,17 +1085,21 @@ export default function ViewerCanvas({
   /* ═══════════════════════════════════════════════════════════
    *  RENDER: Markers (Each)
    *
-   *  Fixed screen-size icons — always appear the same size
-   *  regardless of zoom. This is how Toggle.ai works for
-   *  count markers.
+   *  Each markers scale with the image (zoom in → marker grows,
+   *  zoom out → marker shrinks, staying over the same spot).
+   *  Size is a fraction of the image so low-res and high-res
+   *  pages show the same visual marker size at the same fit zoom.
    * ═══════════════════════════════════════════════════════════ */
+
+  const markerSize = Math.min(width, height) * 0.04
+  const markerStroke = Math.max(1, markerSize * 0.04)
 
   function renderMarker(item: CountItem, def: CountDefinition) {
     const [x, y] = denorm(item.geometry[0][0], item.geometry[0][1])
     const isSel = selectedItemId === item.id
-    const size = sz(S.marker)
-    const sw = sz(isSel ? 2.5 : 1.5)
-    const hit = sz(S.hit)
+    const size = markerSize
+    const sw = markerStroke
+    const hit = S.hit
     const click = (e: any) => handleShapeClick(e, item.id)
     const rotDeg = item.rotation_deg ?? 0
 
@@ -971,7 +1116,7 @@ export default function ViewerCanvas({
           x={0}
           y={0}
           sides={3}
-          radius={size / 2 + sz(1)}
+          radius={size / 2 + 1}
           fill={fill}
           stroke={stroke}
           strokeWidth={sw}
@@ -986,20 +1131,21 @@ export default function ViewerCanvas({
           fill={fill}
           stroke={stroke}
           strokeWidth={sw}
-          cornerRadius={sz(2)}
+          cornerRadius={2}
           {...common}
         />
       )
 
-    // Rotation handle for selected markers
+    // Rotation handle scales proportionally with the marker.
+    const markerHandleOffset = size * 0.6
     const rotHandle = isSel ? (
       <Circle
         x={0}
-        y={-size / 2 - sz(12)}
-        radius={sz(4)}
+        y={-size / 2 - markerHandleOffset}
+        radius={size * 0.16}
         fill="#fff"
         stroke={SEL_COLOR}
-        strokeWidth={sz(1.5)}
+        strokeWidth={3}
         draggable
         onDragStart={(e) => { e.cancelBubble = true }}
         onDragMove={(e) => {
@@ -1010,9 +1156,9 @@ export default function ViewerCanvas({
           if (!pointer) return
           const angle = Math.atan2(pointer.x - x, -(pointer.y - y)) * (180 / Math.PI)
           const updates: Partial<CountItem> = { rotation_deg: Math.round(angle) }
-          void updateCountItem(item.id, updates).then((u) => onCountItemUpdated(u)).catch(() => {})
+          void trackedUpdate(item.id, updates).then((u) => onCountItemUpdated(u)).catch(() => {})
           e.target.x(0)
-          e.target.y(-size / 2 - sz(12))
+          e.target.y(-size / 2 - markerHandleOffset)
         }}
         onDragEnd={(e) => { e.cancelBubble = true }}
         onMouseEnter={(e) => { e.target.getStage()!.container().style.cursor = 'grab' }}
@@ -1045,7 +1191,7 @@ export default function ViewerCanvas({
     const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
     const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
     const isSel = selectedItemId === item.id
-    const sw = sz(isSel ? 2.5 : 1.5)
+    const sw = sz(isSel ? 20 : 16)
 
     const rx = Math.min(x1, x2)
     const ry = Math.min(y1, y2)
@@ -1088,7 +1234,7 @@ export default function ViewerCanvas({
     const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
     const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
     const isSel = selectedItemId === item.id
-    const sw = sz(isSel ? 2.5 : 1.5)
+    const sw = sz(isSel ? 20 : 16)
 
     const cx = (x1 + x2) / 2
     const cy = (y1 + y2) / 2
@@ -1126,15 +1272,16 @@ export default function ViewerCanvas({
    * ═══════════════════════════════════════════════════════════ */
 
   function renderRotationHandle(item: CountItem, cx: number, cy: number, topY: number, _rotDeg: number) {
-    const handleOffset = sz(20)
-    const handleR = sz(6)
-    const lineW = sz(1)
+    // Use fixed canvas-space sizes so the handle scales together with the shape.
+    const handleOffset = 40
+    const handleR = 14
+    const lineW = 3
 
     return (
       <Group>
         <Line points={[cx, topY, cx, topY - handleOffset]} stroke={SEL_COLOR} strokeWidth={lineW} />
         <Circle x={cx} y={topY - handleOffset} radius={handleR}
-          fill="#fff" stroke={SEL_COLOR} strokeWidth={sz(1.5)}
+          fill="#fff" stroke={SEL_COLOR} strokeWidth={3}
           draggable
           onDragStart={(e) => { e.cancelBubble = true }}
           onDragMove={(e) => {
@@ -1145,7 +1292,7 @@ export default function ViewerCanvas({
             if (!pointer) return
             const angle = Math.atan2(pointer.x - cx, -(pointer.y - cy)) * (180 / Math.PI)
             const updates: Partial<CountItem> = { rotation_deg: Math.round(angle) }
-            void updateCountItem(item.id, updates).then((u) => onCountItemUpdated(u)).catch(() => {})
+            void trackedUpdate(item.id, updates).then((u) => onCountItemUpdated(u)).catch(() => {})
             e.target.x(cx)
             e.target.y(topY - handleOffset)
           }}
@@ -1166,7 +1313,7 @@ export default function ViewerCanvas({
     const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
     const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
     const isSel = selectedItemId === item.id
-    const sw = sz(isSel ? 2.5 : 1.5)
+    const sw = sz(isSel ? 20 : 16)
     const midX = (x1 + x2) / 2
     const topY = Math.min(y1, y2)
     const triPts = [midX, topY, Math.max(x1, x2), Math.max(y1, y2), Math.min(x1, x2), Math.max(y1, y2)]
@@ -1314,10 +1461,9 @@ export default function ViewerCanvas({
           </React.Fragment>
         })}
 
-        {/* Area label at centroid */}
-        {renderTag(areaLabel, cx, cy, def.color + 'DD')}
-        {/* Perimeter label below */}
-        {renderTag(perimLabel, cx, cy, 'rgba(0,0,0,0.5)', '#fff', S.fontSm, 20)}
+        {/* Area & perimeter labels at centroid – always show text, but with transparent bg to avoid a solid box */}
+        {renderTag(areaLabel, cx, cy, 'transparent', '#111827', S.fontSm)}
+        {renderTag(perimLabel, cx, cy, 'transparent', '#111827', S.fontSm, 20)}
 
         {/* Vertex handles */}
         {uniqueVerts.map(([nx, ny], idx) => {
@@ -1385,7 +1531,23 @@ export default function ViewerCanvas({
       )
     }
 
-    if (drawingState.type === 'idle' || drawingState.type === 'drawing_rect' || !activeCount) return null
+    // Rectangle polygon preview (2-click rectangle for area_perimeter)
+    if (drawingState.type === 'drawing_rect_polygon' && cursorPos && activeCount) {
+      const [sx, sy] = denorm(drawingState.start[0], drawingState.start[1])
+      const ex = cursorPos.x, ey = cursorPos.y
+      const col = activeCount.color
+      return (
+        <Group listening={false}>
+          <Rect
+            x={Math.min(sx, ex)} y={Math.min(sy, ey)}
+            width={Math.abs(ex - sx)} height={Math.abs(ey - sy)}
+            fill={col + '30'} stroke={col} strokeWidth={sz(2)} dash={[sz(6), sz(4)]}
+          />
+        </Group>
+      )
+    }
+
+    if (drawingState.type === 'idle' || drawingState.type === 'drawing_rect' || drawingState.type === 'drawing_rect_polygon' || !activeCount) return null
     const verts = drawingState.vertices
     if (verts.length === 0) return null
 
@@ -1587,7 +1749,7 @@ export default function ViewerCanvas({
 
     // Pick a "nice" length that produces a bar of ~80-150 screen px
     const nice = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000]
-    const targetScreenPx = 100
+    const targetScreenPx = 140
     const targetCanvasPx = sz(targetScreenPx)
     const targetFt = targetCanvasPx * fpp
 
@@ -1597,9 +1759,9 @@ export default function ViewerCanvas({
 
     const x = sz(16)
     const y = height - sz(16)
-    const tickH = sz(6)
-    const lw = sz(1.5)
-    const fs = sz(9)
+    const tickH = sz(8)
+    const lw = sz(2)
+    const fs = sz(14)
 
     return (
       <Group listening={false}>
@@ -1615,6 +1777,10 @@ export default function ViewerCanvas({
       </Group>
     )
   }
+
+  /* ═══════════════════════════════════════════════════════════
+   *  RENDER: Sticky Notes
+   * ═══════════════════════════════════════════════════════════ */
 
   /* ═══════════════════════════════════════════════════════════
    *  MAIN RENDER

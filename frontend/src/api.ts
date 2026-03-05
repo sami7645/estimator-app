@@ -116,11 +116,26 @@ export type Project = {
   name: string
   description: string
   client_name: string
+  estimating_email: string
   owner: number | null
   created_at: string
   updated_at: string
   is_starred?: boolean
   is_archived?: boolean
+}
+
+export type ProjectEmail = {
+  id: number
+  project: number
+  subject: string
+  sender: string
+  body_preview: string
+  category: 'invite' | 'change' | 'general'
+  received_at: string | null
+  is_read: boolean
+  raw_headers: Record<string, unknown>
+  created_at: string
+  updated_at: string
 }
 
 export type CountDefinition = {
@@ -252,6 +267,29 @@ export async function deleteProject(id: number, token: string): Promise<void> {
   }
 }
 
+export async function fetchProjectEmails(
+  projectId: number,
+  category?: string,
+): Promise<ProjectEmail[]> {
+  let url = `${API_BASE}/project-emails/?project=${projectId}`
+  if (category) url += `&category=${category}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Failed to load project emails')
+  return res.json()
+}
+
+export async function createProjectEmail(
+  data: Partial<ProjectEmail>,
+): Promise<ProjectEmail> {
+  const res = await fetch(`${API_BASE}/project-emails/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to create project email')
+  return res.json()
+}
+
 export async function fetchPlanSets(projectId?: number): Promise<PlanSet[]> {
   const url = projectId
     ? `${API_BASE}/plan-sets/?project=${projectId}`
@@ -326,12 +364,14 @@ export async function deleteCountDefinition(id: number): Promise<void> {
 
 export async function fetchCountItems(
   countDefinitionId?: number,
-  pageId?: number
+  pageId?: number,
+  planSetId?: number
 ): Promise<CountItem[]> {
   let url = `${API_BASE}/count-items/`
   const params = new URLSearchParams()
   if (countDefinitionId) params.append('count_definition', countDefinitionId.toString())
   if (pageId) params.append('page', pageId.toString())
+  if (planSetId) params.append('plan_set', planSetId.toString())
   if (params.toString()) url += '?' + params.toString()
 
   const res = await fetch(url)
@@ -432,9 +472,22 @@ export async function runAutoDetect(
   return res.json()
 }
 
-export async function exportCountsExcel(planSetId?: number): Promise<Blob> {
-  let url = `${API_BASE}/detections/export_counts_excel/`
-  if (planSetId) url += `?plan_set=${planSetId}`
+export type ExcelPricePreset = {
+  pricePerEach?: number
+  pricePerSqft?: number
+  pricePerPerimeterFt?: number
+  pricePerLinearFt?: number
+}
+
+export async function exportCountsExcel(planSetId?: number, pricePreset?: ExcelPricePreset): Promise<Blob> {
+  const params = new URLSearchParams()
+  if (planSetId) params.set('plan_set', String(planSetId))
+  if (pricePreset?.pricePerEach != null) params.set('price_per_each', String(pricePreset.pricePerEach))
+  if (pricePreset?.pricePerSqft != null) params.set('price_per_sqft', String(pricePreset.pricePerSqft))
+  if (pricePreset?.pricePerPerimeterFt != null) params.set('price_per_perimeter_ft', String(pricePreset.pricePerPerimeterFt))
+  if (pricePreset?.pricePerLinearFt != null) params.set('price_per_linear_ft', String(pricePreset.pricePerLinearFt))
+  const qs = params.toString()
+  const url = `${API_BASE}/detections/export_counts_excel/${qs ? `?${qs}` : ''}`
   const res = await fetch(url)
   if (!res.ok) throw new Error('Failed to export Excel')
   return res.blob()

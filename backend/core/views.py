@@ -35,6 +35,7 @@ from .models import (
     TradeDataset,
     DatasetImage,
     Trade,
+    ProjectEmail,
 )
 from .serializers import (
     ProjectSerializer,
@@ -52,6 +53,7 @@ from .serializers import (
     TradeDatasetSerializer,
     DatasetImageSerializer,
     UserSearchSerializer,
+    ProjectEmailSerializer,
 )
 
 User = get_user_model()
@@ -65,17 +67,36 @@ class ProjectViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         if self.request.query_params.get("owner") == "me" and self.request.user.is_authenticated:
             user = self.request.user
-            # Projects owned by user, legacy (no owner), or shared via team membership
             team_owner_ids = TeamMember.objects.filter(
                 user=user, accepted=True
             ).values_list("subscription__owner_id", flat=True)
-            return qs.filter(
+            qs = qs.filter(
                 Q(owner=user) | Q(owner__isnull=True) | Q(owner_id__in=team_owner_ids)
             )
+
+        email = self.request.query_params.get("estimating_email")
+        if email:
+            qs = qs.filter(estimating_email__iexact=email)
+
         return qs
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user if self.request.user.is_authenticated else None)
+
+
+class ProjectEmailViewSet(viewsets.ModelViewSet):
+    queryset = ProjectEmail.objects.all()
+    serializer_class = ProjectEmailSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        project = self.request.query_params.get("project")
+        category = self.request.query_params.get("category")
+        if project:
+            qs = qs.filter(project_id=project)
+        if category:
+            qs = qs.filter(category=category)
+        return qs
 
 
 def _generate_pages_for_plan_set(plan_set: PlanSet) -> None:
@@ -200,10 +221,13 @@ class CountItemViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         cd = self.request.query_params.get("count_definition")
         page = self.request.query_params.get("page")
+        plan_set = self.request.query_params.get("plan_set")
         if cd:
             qs = qs.filter(count_definition_id=cd)
         if page:
             qs = qs.filter(page_id=page)
+        if plan_set:
+            qs = qs.filter(page__plan_set_id=plan_set)
         return qs
 
 
@@ -497,12 +521,10 @@ class DetectionViewSet(viewsets.ModelViewSet):
                             shape=det_shape,
                         )
                         definitions_created.append(local_def)
-                # Shape / placement refinement for "each" count types:
-                # if this definition is drawn as a square / circle /
-                # triangle, recreate a dragged shape (rect/circle/
-                # triangle) around the detected center using the
-                # dataset's typical box dimensions & rotation instead
-                # of a bare point.
+                # "each" items are always stored as a point so the
+                # frontend renders them with a uniform marker size
+                # (same as manually placed each items). Only rotation
+                # varies to match dataset patterns.
                 geom_type = det.geometry_type
                 geom = det.geometry
                 rot = det.rotation_deg
@@ -515,10 +537,6 @@ class DetectionViewSet(viewsets.ModelViewSet):
                     if det.geometry and det.geometry_type == "point":
                         cx, cy = det.geometry[0]
 
-                        # Derive a deterministic index into the dataset
-                        # distributions from the detected position so
-                        # shapes on the page reuse REAL example sizes
-                        # and rotations instead of one fixed square.
                         seed = 0
                         if p is not None:
                             seed = int(
@@ -526,41 +544,16 @@ class DetectionViewSet(viewsets.ModelViewSet):
                                 * 10000.0
                             )
 
-                        if (
-                            p
-                            and getattr(p, "box_widths", None)
-                            and p.box_widths
-                            and p.box_heights
-                        ):
-                            ws = sorted(p.box_widths)
-                            hs = sorted(p.box_heights)
-                            idx = abs(seed) % len(ws)
-                            w = ws[idx]
-                            h = hs[min(idx, len(hs) - 1)]
-                        else:
-                            w = h = 0.04
-
                         if p and getattr(p, "rotations_deg", None) and p.rotations_deg:
                             rs = sorted(p.rotations_deg)
-                            rot_sample = rs[abs(seed) % len(rs)]
+                            rot = rs[abs(seed) % len(rs)]
                         else:
-                            rot_sample = 0.0
+                            rot = 0.0
 
-                        half_w = max(0.005, min(w / 2, 0.25))
-                        half_h = max(0.005, min(h / 2, 0.25))
-                        x1 = max(0.0, cx - half_w)
-                        x2 = min(1.0, cx + half_w)
-                        y1 = max(0.0, cy - half_h)
-                        y2 = min(1.0, cy + half_h)
-
-                        shape_map = {
-                            "square": "rect",
-                            "circle": "circle",
-                            "triangle": "triangle",
-                        }
-                        geom_type = shape_map.get(local_def.shape, "rect")
-                        geom = [[x1, y1], [x2, y2]]
-                        rot = rot_sample
+                        # Keep as point so the frontend renders it
+                        # with the standard markerSize (same as manual).
+                        geom_type = "point"
+                        geom = [[cx, cy]]
 
                 item = CountItem.objects.create(
                     count_definition=local_def,
@@ -617,6 +610,24 @@ class DetectionViewSet(viewsets.ModelViewSet):
         from openpyxl.styles import Font, Alignment, PatternFill, numbers
 
         plan_set_id = request.query_params.get("plan_set")
+        price_per_each = request.query_params.get("price_per_each")
+        price_per_sqft = request.query_params.get("price_per_sqft")
+        price_per_perimeter_ft = request.query_params.get("price_per_perimeter_ft")
+        price_per_linear_ft = request.query_params.get("price_per_linear_ft")
+
+        def _float_or_none(val):
+            if val is None or val == "":
+                return None
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return None
+
+        price_each = _float_or_none(price_per_each)
+        price_sqft = _float_or_none(price_per_sqft)
+        price_perimeter = _float_or_none(price_per_perimeter_ft)
+        price_linear = _float_or_none(price_per_linear_ft)
+        use_prices = any(x is not None for x in (price_each, price_sqft, price_perimeter, price_linear))
 
         defs_qs = CountDefinition.objects.select_related("plan_set", "plan_set__project")
         items_qs = CountItem.objects.select_related(
@@ -701,6 +712,8 @@ class DetectionViewSet(viewsets.ModelViewSet):
             "Count Name", "Type", "Trade", "Color",
             "Total Items", "Total Area (sqft)", "Total Perimeter (ft)", "Total Length (ft)",
         ]
+        if use_prices:
+            headers.append("Total Price")
         for ci, h in enumerate(headers, 1):
             ws1.cell(row=row, column=ci, value=h)
         style_header_row(ws1, row, len(headers))
@@ -713,7 +726,7 @@ class DetectionViewSet(viewsets.ModelViewSet):
             a = sum(i.area_sqft or 0 for i in calibrated_items)
             p = sum(i.perimeter_ft or 0 for i in calibrated_items)
             l = sum(i.length_ft or 0 for i in calibrated_items)
-            ws1.append([
+            row_data = [
                 cd.name,
                 cd.get_count_type_display(),
                 cd.get_trade_display(),
@@ -722,10 +735,17 @@ class DetectionViewSet(viewsets.ModelViewSet):
                 round(a, 2) if a else "",
                 round(p, 2) if p else "",
                 round(l, 2) if l else "",
-            ])
+            ]
+            if use_prices:
+                total_price = (n or 0) * (price_each or 0) + (a or 0) * (price_sqft or 0) + (p or 0) * (price_perimeter or 0) + (l or 0) * (price_linear or 0)
+                row_data.append(round(total_price, 2) if total_price else "")
+            ws1.append(row_data)
 
-        for w, width in [("A", 25), ("B", 18), ("C", 15), ("D", 12),
-                         ("E", 12), ("F", 18), ("G", 18), ("H", 18)]:
+        col_widths = [("A", 25), ("B", 18), ("C", 15), ("D", 12),
+                      ("E", 12), ("F", 18), ("G", 18), ("H", 18)]
+        if use_prices:
+            col_widths.append(("I", 14))
+        for w, width in col_widths:
             ws1.column_dimensions[w].width = width
 
         # ──────────── Sheet 2: Details ────────────
@@ -734,6 +754,8 @@ class DetectionViewSet(viewsets.ModelViewSet):
             "#", "Count Name", "Type", "Trade", "Page #", "Page Title",
             "Geometry", "Area (sqft)", "Perimeter (ft)", "Length (ft)", "Vertices", "Rotation (deg)",
         ]
+        if use_prices:
+            detail_hdrs.append("Price")
         for ci, h in enumerate(detail_hdrs, 1):
             ws2.cell(row=1, column=ci, value=h)
         style_header_row(ws2, 1, len(detail_hdrs))
@@ -745,7 +767,10 @@ class DetectionViewSet(viewsets.ModelViewSet):
             verts = len(item.geometry) if isinstance(item.geometry, list) else 0
             # Only show real-world measurements for calibrated pages
             page_calibrated = item.page_id in calibrated_page_ids
-            ws2.append([
+            area_val = round(item.area_sqft, 2) if page_calibrated and item.area_sqft else 0
+            perim_val = round(item.perimeter_ft, 2) if page_calibrated and item.perimeter_ft else 0
+            length_val = round(item.length_ft, 2) if page_calibrated and item.length_ft else 0
+            row_data = [
                 row_n,
                 cd.name if cd else "",
                 cd.get_count_type_display() if cd else "",
@@ -753,20 +778,28 @@ class DetectionViewSet(viewsets.ModelViewSet):
                 item.page.page_number if item.page else "",
                 item.page.title or (f"Sheet {item.page.page_number}" if item.page else ""),
                 item.geometry_type,
-                round(item.area_sqft, 2) if page_calibrated and item.area_sqft else "",
-                round(item.perimeter_ft, 2) if page_calibrated and item.perimeter_ft else "",
-                round(item.length_ft, 2) if page_calibrated and item.length_ft else "",
+                area_val if page_calibrated and item.area_sqft else "",
+                perim_val if page_calibrated and item.perimeter_ft else "",
+                length_val if page_calibrated and item.length_ft else "",
                 verts,
                 round(item.rotation_deg, 1) if item.rotation_deg else "",
-            ])
+            ]
+            if use_prices:
+                item_price = 1 * (price_each or 0) + (area_val or 0) * (price_sqft or 0) + (perim_val or 0) * (price_perimeter or 0) + (length_val or 0) * (price_linear or 0)
+                row_data.append(round(item_price, 2) if item_price else "")
+            ws2.append(row_data)
 
-        for w, width in [("A", 6), ("B", 25), ("C", 18), ("D", 15), ("E", 10),
-                         ("F", 18), ("G", 12), ("H", 15), ("I", 15), ("J", 15), ("K", 10), ("L", 14)]:
+        detail_cols = [("A", 6), ("B", 25), ("C", 18), ("D", 15), ("E", 10),
+                       ("F", 18), ("G", 12), ("H", 15), ("I", 15), ("J", 15), ("K", 10), ("L", 14)]
+        if use_prices:
+            detail_cols.append(("M", 14))
+        for w, width in detail_cols:
             ws2.column_dimensions[w].width = width
 
-        # Number formatting for measurement columns
+        # Number formatting for measurement and price columns
+        price_col = 13 if use_prices else None
         for r in range(2, ws2.max_row + 1):
-            for c in [8, 9, 10]:
+            for c in [8, 9, 10] + ([price_col] if price_col else []):
                 cell = ws2.cell(row=r, column=c)
                 if isinstance(cell.value, (int, float)):
                     cell.number_format = num_fmt_2
@@ -777,6 +810,8 @@ class DetectionViewSet(viewsets.ModelViewSet):
             "Page #", "Page Title", "Count Name", "Type", "Trade",
             "Items", "Total Area (sqft)", "Total Perimeter (ft)", "Total Length (ft)",
         ]
+        if use_prices:
+            page_hdrs.append("Total Price")
         for ci, h in enumerate(page_hdrs, 1):
             ws3.cell(row=1, column=ci, value=h)
         style_header_row(ws3, 1, len(page_hdrs))
@@ -794,20 +829,31 @@ class DetectionViewSet(viewsets.ModelViewSet):
                     continue
                 cd_items = page_items.filter(count_definition=cd)
                 page_calibrated = page.id in calibrated_page_ids
-                ws3.append([
+                n = cd_items.count()
+                a = sum(i.area_sqft or 0 for i in cd_items) if page_calibrated else 0
+                p = sum(i.perimeter_ft or 0 for i in cd_items) if page_calibrated else 0
+                l = sum(i.length_ft or 0 for i in cd_items) if page_calibrated else 0
+                row_data = [
                     page.page_number,
                     page.title or f"Sheet {page.page_number}",
                     cd.name,
                     cd.get_count_type_display(),
                     cd.get_trade_display(),
-                    cd_items.count(),
-                    round(sum(i.area_sqft or 0 for i in cd_items), 2) or "" if page_calibrated else "",
-                    round(sum(i.perimeter_ft or 0 for i in cd_items), 2) or "" if page_calibrated else "",
-                    round(sum(i.length_ft or 0 for i in cd_items), 2) or "" if page_calibrated else "",
-                ])
+                    n,
+                    round(a, 2) or "" if page_calibrated else "",
+                    round(p, 2) or "" if page_calibrated else "",
+                    round(l, 2) or "" if page_calibrated else "",
+                ]
+                if use_prices:
+                    total_price = (n or 0) * (price_each or 0) + (a or 0) * (price_sqft or 0) + (p or 0) * (price_perimeter or 0) + (l or 0) * (price_linear or 0)
+                    row_data.append(round(total_price, 2) if total_price else "")
+                ws3.append(row_data)
 
-        for w, width in [("A", 10), ("B", 20), ("C", 25), ("D", 18), ("E", 15),
-                         ("F", 10), ("G", 18), ("H", 18), ("I", 18)]:
+        by_page_cols = [("A", 10), ("B", 20), ("C", 25), ("D", 18), ("E", 15),
+                        ("F", 10), ("G", 18), ("H", 18), ("I", 18)]
+        if use_prices:
+            by_page_cols.append(("J", 14))
+        for w, width in by_page_cols:
             ws3.column_dimensions[w].width = width
 
         # ── Write response ──
@@ -1097,11 +1143,20 @@ def dataset_stats_all(request):
 
     stats = {}
     for trade_val, trade_label in Trade.choices:
-        # Global dataset: ALL manual items across ALL users for this trade
-        global_qs = CountItem.objects.filter(
-            count_definition__trade=trade_val,
-            is_auto_detected=False,
+        # Global dataset: manual items on pages that have been
+        # explicitly saved to the dataset for this trade.
+        dataset_page_ids = list(
+            DatasetExample.objects.filter(trade=trade_val)
+            .values_list("plan_page_id", flat=True)
         )
+        if dataset_page_ids:
+            global_qs = CountItem.objects.filter(
+                count_definition__trade=trade_val,
+                is_auto_detected=False,
+                page_id__in=dataset_page_ids,
+            )
+        else:
+            global_qs = CountItem.objects.none()
         if page_id:
             global_qs = global_qs.exclude(page_id=page_id)
         global_count = global_qs.count()
