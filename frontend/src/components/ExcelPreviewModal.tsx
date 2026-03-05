@@ -172,7 +172,7 @@ export default function ExcelPreviewModal({ planSetId, onClose, exportCountsExce
     try {
       await loadExcel(preset)
     } catch (e) {
-      setError(e?.message || 'Failed to apply prices')
+      setError(e instanceof Error ? e.message : 'Failed to apply prices')
     } finally {
       setApplyingPrices(false)
     }
