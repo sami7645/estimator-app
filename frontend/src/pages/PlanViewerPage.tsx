@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
+import { flushSync } from 'react-dom'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle, Map as MapIcon, Satellite } from 'lucide-react'
 import type { PlanSet, PlanPage, CountDefinition, CountItem, AutoDetectResult } from '../api'
-import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, MEDIA_BASE } from '../api'
+import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, MEDIA_BASE } from '../api'
 import { exportPlanAsPdf } from '../utils/exportPlanPdf'
 import CountsPanel from '../components/CountsPanel'
 import ViewerCanvas from '../components/ViewerCanvas'
@@ -106,12 +107,17 @@ export default function PlanViewerPage() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [noteMode, setNoteMode] = useState(false)
   const [noteColor, setNoteColor] = useState('#fef08a')
+  const [eraseMode, setEraseMode] = useState(false)
   const [notes, setNotes] = useState<Map<number, { id: string; x: number; y: number; text: string; color: string }[]>>(new Map())
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
   const [editingNoteDraft, setEditingNoteDraft] = useState<string>('')
   const [pendingNotePos, setPendingNotePos] = useState<{ x: number; y: number } | null>(null)
   const [noteEditorDragging, setNoteEditorDragging] = useState(false)
   const [noteEditorDragPosition, setNoteEditorDragPosition] = useState<{ x: number; y: number } | null>(null)
+  /** Which background image to show: plan (primary) or satellite (secondary, same scale). */
+  const [backgroundView, setBackgroundView] = useState<'plan' | 'satellite'>('plan')
+  const [uploadAltLoading, setUploadAltLoading] = useState(false)
+  const uploadAltInputRef = useRef<HTMLInputElement>(null)
   const noteEditorDragRef = useRef<{
     startClientX: number
     startClientY: number
@@ -248,7 +254,13 @@ export default function PlanViewerPage() {
       if ((e.key === 't' || e.key === 'T') && (!e.ctrlKey && !e.metaKey)) {
         e.preventDefault()
         setNoteMode(prev => !prev)
-        if (!noteMode) setPanMode(false)
+        if (!noteMode) { setPanMode(false); setEraseMode(false) }
+      }
+      if ((e.key === 'e' || e.key === 'E') && (!e.ctrlKey && !e.metaKey)) {
+        e.preventDefault()
+        setEraseMode(prev => !prev)
+        if (!eraseMode) setPanMode(false)
+        else setNoteMode(false)
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === 't' || e.key === 'T')) {
         e.preventDefault()
@@ -276,7 +288,7 @@ export default function PlanViewerPage() {
     }
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [isCalibrating, noteMode, selectedNoteId, selectedPage, notes])
+  }, [isCalibrating, noteMode, eraseMode, selectedNoteId, selectedPage, notes])
 
   /* ─── Save tracking ─── */
 
@@ -363,6 +375,11 @@ export default function PlanViewerPage() {
     }
   }, [selectedPage])
 
+  // When switching page, use plan view if this page has no alternate image
+  useEffect(() => {
+    if (selectedPage && !selectedPage.image_alt) setBackgroundView('plan')
+  }, [selectedPage?.id, selectedPage?.image_alt])
+
   /* ─── Undo / Redo ─── */
 
   useEffect(() => {
@@ -414,8 +431,29 @@ export default function PlanViewerPage() {
     try {
       const data = await fetchPlanSet(planSetId)
       setPlanSet(data)
+      return data
     } catch (err) {
       console.error('Failed to load plan set:', err)
+      return null
+    }
+  }
+
+  async function handleUploadAlt(file: File) {
+    if (!selectedPage) return
+    const pageId = selectedPage.id
+    setUploadAltLoading(true)
+    try {
+      const updated = await uploadPlanPageAlt(pageId, file)
+      const data = await loadPlanSet()
+      const nextPage = data?.pages?.find((p) => p.id === pageId) ?? updated
+      setSelectedPage(nextPage)
+      setBackgroundView('satellite')
+    } catch (err) {
+      console.error('Upload alternate image failed:', err)
+      alert(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setUploadAltLoading(false)
+      if (uploadAltInputRef.current) uploadAltInputRef.current.value = ''
     }
   }
 
@@ -760,6 +798,38 @@ export default function PlanViewerPage() {
     pushHistory(newItems)
   }
 
+  function handleCountItemsBatchDeleted(ids: number[]) {
+    const idSet = new Set(ids)
+    const currentItems = countItemsRef.current.length > 0 ? countItemsRef.current : countItems
+    const newItems = currentItems.filter((item) => !idSet.has(item.id))
+    setCountItems(newItems)
+    countItemsRef.current = newItems
+    pushHistory(newItems)
+  }
+
+  function handleCountItemsBatchCreated(items: CountItem[]) {
+    const currentItems = countItemsRef.current.length > 0 ? countItemsRef.current : countItems
+    const newItems = [...currentItems, ...items]
+    setCountItems(newItems)
+    countItemsRef.current = newItems
+    pushHistory(newItems)
+  }
+
+  function handleCountItemsBatchMoved(updates: { id: number; item: CountItem }[]) {
+    if (updates.length === 0) return
+    const updateMap = new Map(updates.map(({ id, item }) => [id, item]))
+    const currentItems = countItemsRef.current.length > 0 ? countItemsRef.current : countItems
+    const newItems = currentItems.map((i) => {
+      const updated = updateMap.get(i.id)
+      return updated ? { ...i, ...updated, geometry: updated.geometry.map((c: number[]) => [...c]) } : i
+    })
+    countItemsRef.current = newItems.map((i) => ({ ...i, geometry: i.geometry.map((c) => [...c]) }))
+    flushSync(() => {
+      setCountItems(newItems)
+      pushHistory(newItems)
+    })
+  }
+
   // Keep refs in sync
   useEffect(() => {
     countItemsRef.current = countItems
@@ -837,10 +907,12 @@ export default function PlanViewerPage() {
       geometry: i.geometry.map(coord => [...coord])
     }))
     
-    // NOW update React state (this will be batched, but cache is already updated)
-    setCountItems(newItems)
-    setHistory(newHistory)
-    setHistoryIndex(newIndex)
+    // Flush state so canvas has new geometry before drag handler continues (avoids drop glitch)
+    flushSync(() => {
+      setCountItems(newItems)
+      setHistory(newHistory)
+      setHistoryIndex(newIndex)
+    })
     
     // Log for debugging
     console.log('Position updated:', {
@@ -1538,6 +1610,16 @@ export default function PlanViewerPage() {
                 )}
               </button>
             </div>
+            <input
+              type="file"
+              ref={uploadAltInputRef}
+              accept="image/*,.pdf"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) handleUploadAlt(f)
+              }}
+            />
             <Toolbar
               onZoomIn={handleZoomIn}
               onZoomOut={handleZoomOut}
@@ -1555,6 +1637,14 @@ export default function PlanViewerPage() {
               noteColor={noteColor}
               onSetNoteMode={setNoteMode}
               onNoteColorChange={setNoteColor}
+              eraseMode={eraseMode}
+              onSetEraseMode={setEraseMode}
+              hasPage={!!selectedPage}
+              hasAltImage={!!selectedPage?.image_alt}
+              backgroundView={backgroundView}
+              onBackgroundViewChange={setBackgroundView}
+              onUploadAltClick={() => uploadAltInputRef.current?.click()}
+              uploadAltLoading={uploadAltLoading}
             />
           </div>
 
@@ -1598,11 +1688,13 @@ export default function PlanViewerPage() {
                     >
                       <img
                         src={
-                          selectedPage.image.startsWith('http')
-                            ? selectedPage.image
-                            : `${MEDIA_BASE}/${selectedPage.image}`
+                          (() => {
+                            const useAlt = backgroundView === 'satellite' && selectedPage.image_alt
+                            const raw = useAlt ? selectedPage.image_alt! : selectedPage.image
+                            return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
+                          })()
                         }
-                        alt={`Page ${selectedPage.page_number}`}
+                        alt={backgroundView === 'satellite' ? `Page ${selectedPage.page_number} (alternate)` : `Page ${selectedPage.page_number}`}
                         onLoad={handleImageLoad}
                         className="viewer-image"
                         style={{
@@ -1776,10 +1868,10 @@ export default function PlanViewerPage() {
                                   minHeight: 24,
                                   padding: '6px 8px',
                                   boxSizing: 'border-box',
-                                  background: note.color + 'CC',
-                                  border: '2px solid #000',
-                                  borderRadius: 0,
-                                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                                  background: note.color + '30',
+                                  border: `1px solid ${note.color}99`,
+                                  borderRadius: 2,
+                                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
                                   fontSize: 12,
                                   color: '#333',
                                   fontFamily: 'Inter, system-ui, sans-serif',
@@ -1789,6 +1881,7 @@ export default function PlanViewerPage() {
                                   pointerEvents: 'auto',
                                   cursor: noteDraggingId === note.id ? 'grabbing' : 'grab',
                                   userSelect: 'none',
+                                  backdropFilter: 'blur(1px)',
                                 }}
                                 onClick={(e) => {
                                   e.stopPropagation()
@@ -1833,6 +1926,9 @@ export default function PlanViewerPage() {
                           onCountItemDeleted={handleCountItemDeleted}
                           onCountItemUpdated={handleCountItemUpdated}
                           onCountItemRestoredByRedo={handleCountItemRestoredByRedo}
+                          onCountItemsBatchCreated={handleCountItemsBatchCreated}
+                          onCountItemsBatchDeleted={handleCountItemsBatchDeleted}
+                          onCountItemsBatchMoved={handleCountItemsBatchMoved}
                           pageId={selectedPage.id}
                           showCounts={countsVisible}
                           hiddenCountIds={hiddenCountIds}
@@ -1850,6 +1946,7 @@ export default function PlanViewerPage() {
                           noteMode={noteMode}
                           noteColor={noteColor}
                           onNoteCreated={handleNoteCreated}
+                          eraseMode={eraseMode}
                           showNoteEditor={!!(pendingNotePos || editingNoteId)}
                           onDismissNoteEditor={handleNoteDismiss}
                           onCanvasClick={() => setSelectedNoteId(null)}
@@ -1864,6 +1961,28 @@ export default function PlanViewerPage() {
               </div>
             )
           })()}
+          {selectedPage?.image_alt && (
+            <div className="viewer-map-type-switch" role="group" aria-label="Map type">
+              <button
+                type="button"
+                className={`viewer-map-type-btn ${backgroundView === 'plan' ? 'active' : ''}`}
+                onClick={() => setBackgroundView('plan')}
+                title="Plan view"
+                aria-label="Plan view"
+              >
+                <MapIcon size={18} strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                className={`viewer-map-type-btn ${backgroundView === 'satellite' ? 'active' : ''}`}
+                onClick={() => setBackgroundView('satellite')}
+                title="Satellite / alternate view"
+                aria-label="Satellite view"
+              >
+                <Satellite size={18} strokeWidth={2} />
+              </button>
+            </div>
+          )}
           </div>
         </div>
 
@@ -1970,18 +2089,21 @@ export default function PlanViewerPage() {
               <h4>Selection & movement</h4>
               <ul>
                 <li><kbd>Click</kbd> any shape, line, area, or marker to select it</li>
-                <li><kbd>Click + drag</kbd> a selected item to move it anywhere on the canvas</li>
-                <li><kbd>Arrow keys</kbd>: nudge selected item by small increments</li>
-                <li><kbd>Shift + Arrow keys</kbd>: nudge selected item by larger increments</li>
-                <li><kbd>Ctrl/Cmd + C</kbd>: copy selected item to clipboard</li>
-                <li><kbd>Ctrl/Cmd + V</kbd>: paste copied item (offset slightly from original)</li>
-                <li><kbd>Click empty space</kbd>: deselect current item</li>
+                <li><kbd>Shift + Click</kbd> to add/remove items from selection (multi-select)</li>
+                <li><kbd>Delete</kbd> or <kbd>Backspace</kbd>: delete all selected items</li>
+                <li><kbd>Click + drag</kbd> a selected item to move it (moves all selected)</li>
+                <li><kbd>Arrow keys</kbd>: nudge selected item(s) by small increments</li>
+                <li><kbd>Shift + Arrow keys</kbd>: nudge by larger increments</li>
+                <li><kbd>Ctrl/Cmd + C</kbd>: copy selected item(s)</li>
+                <li><kbd>Ctrl/Cmd + V</kbd>: paste copied item(s) (offset from original)</li>
+                <li><kbd>Click empty space</kbd>: deselect</li>
               </ul>
             </div>
             <div className="viewer-shortcuts-section">
               <h4>Drawing lines & areas</h4>
               <ul>
                 <li><kbd>Click</kbd> to place vertices for lines and polygons</li>
+                <li><kbd>Double‑click</kbd> on a line/polygon segment to add a vertex (dot)</li>
                 <li><kbd>Double‑click</kbd> or <kbd>Enter</kbd>: finish current line/area</li>
                 <li><kbd>Esc</kbd>: finish or cancel the current shape</li>
                 <li><kbd>Backspace</kbd> or <kbd>Delete</kbd> while drawing: remove last vertex</li>
@@ -2028,17 +2150,27 @@ export default function PlanViewerPage() {
             <div className="viewer-shortcuts-section">
               <h4>Notes</h4>
               <ul>
-                <li><kbd>T</kbd> or <kbd>Ctrl/Cmd + T</kbd>: toggle note mode (press again to close and return to select)</li>
-                <li><kbd>Click</kbd> in note mode: place a colored note</li>
-                <li><kbd>Double‑click</kbd> a note: edit its text</li>
+                <li><kbd>T</kbd> or <kbd>Ctrl/Cmd + T</kbd>: toggle note mode</li>
+                <li><kbd>Click</kbd> in note mode: place a colored note (16 colors available)</li>
+                <li><kbd>Click</kbd> a note: edit its text</li>
+                <li>Notes appear as transparent sticky notes</li>
               </ul>
             </div>
             <div className="viewer-shortcuts-section">
-              <h4>Rectangle polygon</h4>
+              <h4>Area & Perimeter shortcuts</h4>
               <ul>
-                <li><kbd>R</kbd> (with Area & Perimeter active): toggle rectangle mode</li>
-                <li>First <kbd>Click</kbd>: set first corner</li>
-                <li>Second <kbd>Click</kbd>: set opposite corner, creates rectangular polygon</li>
+                <li><kbd>R</kbd>: toggle rectangle mode — 2 clicks to create rectangular polygon</li>
+                <li><kbd>C</kbd>: toggle circle mode — 2 clicks (center + edge) to create circle polygon</li>
+              </ul>
+            </div>
+            <div className="viewer-shortcuts-section">
+              <h4>Erase tool</h4>
+              <ul>
+                <li><kbd>E</kbd>: toggle erase mode (click any shape to delete it)</li>
+                <li><kbd>R</kbd> while in erase mode: only delete rectangular polygons (toggle)</li>
+                <li><kbd>C</kbd> while in erase mode: only delete circle shapes (toggle)</li>
+                <li>Press <kbd>R</kbd> or <kbd>C</kbd> again to clear the filter</li>
+                <li>Click the eraser icon or press <kbd>E</kbd> again to exit erase mode</li>
               </ul>
             </div>
             <div className="viewer-shortcuts-section">

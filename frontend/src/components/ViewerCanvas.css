@@ -5,6 +5,10 @@
   width: 100%;
   height: 100%;
   pointer-events: all;
+  /* Force own compositor layer so canvas repaints cleanly during drag (avoids trail/ghost artifacts when parent has CSS transform) */
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  isolation: isolate;
 }
 
 /* Hide native cursor when using custom Konva crosshair */

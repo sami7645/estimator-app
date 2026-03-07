@@ -1,0 +1,42 @@
+1. SELECT MULTIPLE ITEMS TO DELETE FASTER
+   - Shift + Click to add/remove shapes from selection
+   - Press Delete or Backspace to remove all selected items at once
+   - Test: Select 2–3 shapes with Shift+Click → press Delete → all selected disappear
+
+2. MOVE MULTIPLE OR COPY MULTIPLE
+   - Shift + Click to select several shapes
+   - Drag one selected shape → all selected move together
+   - Ctrl+C to copy, Ctrl+V to paste all selected
+   - Test: Shift+Click 2 shapes → drag one → both move; or Ctrl+C → Ctrl+V → both copy
+
+3. DOUBLE-CLICK TO ADD VERTEX (DOT)
+   - Works on Linear Feet lines and Area/Perimeter polygons
+   - Double-click on a segment (between two vertices) to add a new vertex
+   - Test: Draw a line or polygon → double-click on a segment → new handle appears
+
+4. NOTES – TRANSPARENT STICKY NOTE LOOK
+   - Press T or click Note tool to add notes
+   - Notes use semi-transparent fill with colored border (like sticky notes)
+   - Test: T → click canvas → note appears with transparent color fill
+
+5. SHORTCUT HINTS
+   - Toolbar buttons show shortcut labels (e.g. Select, E, R, C)
+   - Hover over buttons for tooltip with shortcut
+   - Test: Hover toolbar buttons → see shortcut hints
+
+6. TWICE AS MANY NOTE COLORS (16)
+   - Note color picker shows 16 colors in a 4×4 grid
+   - Test: Add note → open color picker → 16 colors available
+
+7. R & C SHORTCUTS FOR RECTANGLE AND CIRCLE
+   - Select Area & Perimeter count → press R for rectangle mode
+   - Two clicks: first = corner, second = opposite corner
+   - Press C for circle mode → two clicks: center then edge
+   - Test: Select area_perimeter → R → click twice for rect; C → click twice for circle
+
+8. ERASE TOOL
+   - Press E or click Eraser to enter erase mode
+   - Click a shape to delete it
+   - Press R in erase mode: delete only rectangles
+   - Press C in erase mode: delete only circles (press again to clear filter)
+   - Test: E → click shape to delete; E → R → only rects delete; E → C → only circles delete

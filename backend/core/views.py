@@ -13,6 +13,8 @@ from django.utils import timezone
 import fitz  # PyMuPDF
 from pathlib import Path
 from io import BytesIO
+import tempfile
+from django.core.files.base import ContentFile
 from openpyxl import Workbook
 import math
 
@@ -165,6 +167,54 @@ class PlanSetViewSet(viewsets.ModelViewSet):
 class PlanPageViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = PlanPage.objects.all()
     serializer_class = PlanPageSerializer
+    parser_classes = [MultiPartParser, FormParser] + list(viewsets.ReadOnlyModelViewSet.parser_classes)
+
+    @action(detail=True, methods=["post"])
+    def upload_alt(self, request, pk=None):
+        """
+        Upload a second background image for this page (e.g. satellite view).
+        Accepts: image (jpg/png/jpeg etc) or PDF (first page converted to PNG). Same scale as primary image.
+        Body: multipart form with key "file".
+        """
+        page = self.get_object()
+        file = request.FILES.get("file")
+        if not file:
+            return Response({"detail": "No file provided. Use form key 'file'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        name_lower = (file.name or "").lower()
+        is_pdf = name_lower.endswith(".pdf") or (getattr(file, "content_type", "") or "").lower() == "application/pdf"
+
+        try:
+            if is_pdf:
+                # Convert first page of PDF to PNG (same zoom as plan set pages for consistent scale)
+                raw = file.read()
+                doc = fitz.open(stream=raw, filetype="pdf")
+                if len(doc) == 0:
+                    doc.close()
+                    return Response({"detail": "PDF has no pages."}, status=status.HTTP_400_BAD_REQUEST)
+                first_page = doc.load_page(0)
+                zoom_x, zoom_y = 2.0, 2.0
+                pix = first_page.get_pixmap(matrix=fitz.Matrix(zoom_x, zoom_y))
+                doc.close()
+                # Save to temp file then to image_alt (same API as plan set page generation)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    pix.save(tmp.name)
+                    with open(tmp.name, "rb") as f:
+                        page.image_alt.save(
+                            f"page_{page.id}_alt.png",
+                            ContentFile(f.read()),
+                            save=True,
+                        )
+                Path(tmp.name).unlink(missing_ok=True)
+            else:
+                # Accept image (jpg, png, jpeg, etc.)
+                save_name = file.name or f"page_{page.id}_alt.png"
+                if not save_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                    save_name = f"page_{page.id}_alt.png"
+                page.image_alt.save(save_name, file, save=True)
+            return Response(PlanPageSerializer(page).data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["post"])
     def add_to_dataset(self, request, pk=None):

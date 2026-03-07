@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react'
-import { Stage, Layer, Line, Circle, Ellipse, Rect, RegularPolygon, Group, Text } from 'react-konva'
+import { flushSync } from 'react-dom'
+import { Stage, Layer, Line, Circle, Ellipse, Rect, RegularPolygon, Group, Text, Image } from 'react-konva'
 import type { CountItem, CountDefinition } from '../api'
-import { createCountItem, deleteCountItem, updateCountItem } from '../api'
+import { createCountItem, deleteCountItem, updateCountItem, MEDIA_BASE } from '../api'
 import './ViewerCanvas.css'
 
 /* ═══════════════════════════════════════════════════════════
@@ -21,6 +22,9 @@ interface ViewerCanvasProps {
   onCountItemDeleted: (id: number) => void
   onCountItemUpdated: (item: CountItem) => void
   onCountItemRestoredByRedo?: (item: CountItem) => void
+  onCountItemsBatchCreated?: (items: CountItem[]) => void
+  onCountItemsBatchDeleted?: (ids: number[]) => void
+  onCountItemsBatchMoved?: (updates: { id: number; item: CountItem }[]) => void
   pageId: number
   showCounts: boolean
   hiddenCountIds: Set<number>
@@ -44,6 +48,7 @@ interface ViewerCanvasProps {
   onSaveStart?: () => void
   onSaveEnd?: () => void
   onSaveError?: () => void
+  eraseMode?: boolean
 }
 
 type DrawingState =
@@ -52,6 +57,7 @@ type DrawingState =
   | { type: 'drawing_polygon'; vertices: number[][] }
   | { type: 'drawing_rect'; start: [number, number] }
   | { type: 'drawing_rect_polygon'; start: [number, number] }
+  | { type: 'drawing_circle_polygon'; center: [number, number] }
 
 /* ═══════════════════════════════════════════════════════════
  *  CONSTANTS  —  all in CSS-screen-pixels
@@ -121,6 +127,9 @@ export default function ViewerCanvas({
   onCountItemDeleted,
   onCountItemUpdated,
   onCountItemRestoredByRedo,
+  onCountItemsBatchCreated,
+  onCountItemsBatchDeleted,
+  onCountItemsBatchMoved,
   pageId,
   showCounts,
   hiddenCountIds,
@@ -144,6 +153,7 @@ export default function ViewerCanvas({
   onSaveStart,
   onSaveEnd,
   onSaveError,
+  eraseMode = false,
 }: ViewerCanvasProps) {
 
   async function trackedCreate(data: Parameters<typeof createCountItem>[0]) {
@@ -185,18 +195,39 @@ export default function ViewerCanvas({
 
   const [drawingState, setDrawingState] = useState<DrawingState>({ type: 'idle' })
   const [hoveredVertex, setHoveredVertex] = useState<{ itemId: number; idx: number } | null>(null)
-  const [selectedItemId, setSelectedItemId] = useState<number | null>(null)
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set())
   const [selectedVertex, setSelectedVertex] = useState<{ itemId: number; idx: number } | null>(null)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
   const [cPressed, setCPressed] = useState(false)
   const [spacePressed, setSpacePressed] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [rectPolygonMode, setRectPolygonMode] = useState(false)
-  const clipboardRef = useRef<CountItem | null>(null)
+  const [circlePolygonMode, setCirclePolygonMode] = useState(false)
+  const [eraseFilter, setEraseFilter] = useState<'all' | 'rect' | 'circle'>('all')
+  const [multiDragOffset, setMultiDragOffset] = useState<{ dx: number; dy: number } | null>(null)
+  const clipboardRef = useRef<CountItem[] | CountItem | null>(null)
   const stageRef = useRef<any>(null)
   const lastClickTimeRef = useRef(0)
   const lastClickPosRef = useRef<{ x: number; y: number } | null>(null)
   const countItemsRef = useRef<CountItem[]>(countItems)
+  const selectedItemIdsRef = useRef<Set<number>>(new Set())
+  const selectedItemIdsAtDragStartRef = useRef<Set<number>>(new Set())
+  const draggedItemIdRef = useRef<number | null>(null)
+  const dragJustEndedRef = useRef(false)
+  const completingDragRef = useRef(false)
+  const multiDragPointerStartRef = useRef<{ x: number; y: number } | null>(null)
+  const multiDragRafRef = useRef<number | null>(null)
+  const lastDragActivityTimeRef = useRef(0)
+  const recentlyMovedIdsRef = useRef<Set<number>>(new Set())
+  const singleDragStartPosRef = useRef<{ x: number; y: number } | null>(null)
+  const multiDragBasesRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+  const multiDragStartAbsoluteRef = useRef<{ x: number; y: number } | null>(null)
+  const multiDragOffsetRef = useRef<{ dx: number; dy: number } | null>(null)
+  const forceGroupZeroIdRef = useRef<number | null>(null)
+  const DRAG_GUARD_MS = 800
+  const DRAG_DELETE_BLOCK_MS = 1200
+  const RECENTLY_MOVED_BLOCK_MS = 2200
+  const DRAG_DISTANCE_PX = 6
 
   // Vertex-level redo stack (cleared when new vertex is added)
   const vertexRedoStackRef = useRef<number[][]>([])
@@ -292,16 +323,17 @@ export default function ViewerCanvas({
   /* ─── Derived ─── */
 
   const activeCount = countDefinitions.find((d) => d.id === activeCountId)
-  const isDrawingMode = !isCalibrating && showCounts && activeCount != null && !panMode && !spacePressed && !noteMode
+  const isDrawingMode = !isCalibrating && showCounts && activeCount != null && !panMode && !spacePressed && !noteMode && !eraseMode
   const isLineOrPolygonTool = activeCount && (activeCount.count_type === 'linear_feet' || activeCount.count_type === 'area_perimeter')
   const showCrosshair = isDrawingMode && activeCount && activeCount.count_type !== 'each' &&
-    (drawingState.type === 'drawing_polyline' || drawingState.type === 'drawing_polygon' || drawingState.type === 'drawing_rect_polygon' ||
+    (drawingState.type === 'drawing_polyline' || drawingState.type === 'drawing_polygon' || drawingState.type === 'drawing_rect_polygon' || drawingState.type === 'drawing_circle_polygon' ||
       (drawingState.type === 'idle' && isLineOrPolygonTool))
 
-  // Reset rectPolygonMode when switching away from area_perimeter
+  // Reset rect/circle polygon mode when switching away from area_perimeter
   useEffect(() => {
     if (!activeCount || activeCount.count_type !== 'area_perimeter') {
       setRectPolygonMode(false)
+      setCirclePolygonMode(false)
     }
   }, [activeCount?.id, activeCount?.count_type])
 
@@ -352,6 +384,11 @@ export default function ViewerCanvas({
     countItemsRef.current = countItems
   }, [countItems])
 
+  // Keep selectedItemIds ref in sync for drag handler
+  useEffect(() => {
+    selectedItemIdsRef.current = selectedItemIds
+  }, [selectedItemIds])
+
   /** Visible items. */
   const visibleItems = showCounts
     ? countItems.filter((item) => !hiddenCountIds.has(item.count_definition))
@@ -369,6 +406,85 @@ export default function ViewerCanvas({
 
   function dist(x1: number, y1: number, x2: number, y2: number) {
     return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+  }
+
+  /** Distance from point (px,py) to line segment (x1,y1)-(x2,y2). Returns { dist, t } where t is 0..1 for closest point. */
+  function pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): { dist: number; t: number } {
+    const dx = x2 - x1, dy = y2 - y1
+    const len2 = dx * dx + dy * dy
+    if (len2 === 0) return { dist: dist(px, py, x1, y1), t: 0 }
+    let t = ((px - x1) * dx + (py - y1) * dy) / len2
+    t = Math.max(0, Math.min(1, t))
+    const qx = x1 + t * dx
+    const qy = y1 + t * dy
+    return { dist: dist(px, py, qx, qy), t }
+  }
+
+  /** Find segment index and projected point for a specific item. Returns { segIdx, newVertex } or null. */
+  function findSegmentAtPointForItem(itemId: number, pos: { x: number; y: number }): { segIdx: number; newVertex: [number, number] } | null {
+    const item = countItems.find((i) => i.id === itemId)
+    if (!item || (item.geometry_type !== 'polyline' && item.geometry_type !== 'polygon')) return null
+    const verts = item.geometry_type === 'polygon' ? item.geometry.slice(0, -1) : item.geometry
+    if (verts.length < 2) return null
+    const threshold = sz(S.hit)
+    let best: { segIdx: number; newVertex: [number, number]; d: number } | null = null
+    for (let i = 0; i < verts.length - 1; i++) {
+      const [nx1, ny1] = verts[i]
+      const [nx2, ny2] = verts[i + 1]
+      const [x1, y1] = denorm(nx1, ny1)
+      const [x2, y2] = denorm(nx2, ny2)
+      const { dist: d, t } = pointToSegmentDist(pos.x, pos.y, x1, y1, x2, y2)
+      if (d < threshold && (best == null || d < best.d)) {
+        const qx = x1 + t * (x2 - x1)
+        const qy = y1 + t * (y2 - y1)
+        best = { segIdx: i + 1, newVertex: norm(qx, qy), d }
+      }
+    }
+    if (item.geometry_type === 'polygon' && verts.length >= 2) {
+      const [nx1, ny1] = verts[verts.length - 1]
+      const [nx2, ny2] = verts[0]
+      const [x1, y1] = denorm(nx1, ny1)
+      const [x2, y2] = denorm(nx2, ny2)
+      const { dist: d, t } = pointToSegmentDist(pos.x, pos.y, x1, y1, x2, y2)
+      if (d < threshold && (best == null || d < best.d)) {
+        const qx = x1 + t * (x2 - x1)
+        const qy = y1 + t * (y2 - y1)
+        best = { segIdx: verts.length, newVertex: norm(qx, qy), d }
+      }
+    }
+    return best ? { segIdx: best.segIdx, newVertex: best.newVertex } : null
+  }
+
+  function handleLineDblClick(itemId: number, e: any) {
+    if (drawingState.type !== 'idle') return
+    e.cancelBubble = true
+    const pos = getCanvasPointer(e.evt)
+    if (!pos) return
+    const found = findSegmentAtPointForItem(itemId, pos)
+    if (found) void addVertexToSegment(itemId, found.segIdx, found.newVertex)
+  }
+
+  async function addVertexToSegment(itemId: number, segIdx: number, newVertex: [number, number]) {
+    const item = countItems.find((i) => i.id === itemId)
+    if (!item || (item.geometry_type !== 'polyline' && item.geometry_type !== 'polygon')) return
+    const g = [...item.geometry]
+    g.splice(segIdx, 0, newVertex)
+    if (item.geometry_type === 'polygon' && g.length >= 2) {
+      g[g.length - 1] = [...g[0]]
+    }
+    const updates: Partial<CountItem> = { geometry: g }
+    if (isCalibrated) {
+      if (item.geometry_type === 'polyline') updates.length_ft = calcLength(g)
+      else if (item.geometry_type === 'polygon') {
+        updates.area_sqft = calcArea(g)
+        updates.perimeter_ft = calcPerimeter(g)
+      }
+    } else {
+      if (item.geometry_type === 'polyline') updates.length_ft = null
+      else if (item.geometry_type === 'polygon') { updates.area_sqft = null; updates.perimeter_ft = null }
+    }
+    try { const u = await trackedUpdate(itemId, updates); onCountItemUpdated(u) }
+    catch (err) { console.error('Add vertex failed:', err) }
   }
 
   /* ─── Measurement helpers ─── */
@@ -529,54 +645,65 @@ export default function ViewerCanvas({
       
       // Handle copy/paste first before other handlers
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-        // Copy selected item
-        if (selectedItemId != null && drawingState.type === 'idle' && !isDragging) {
+        // Copy selected item(s)
+        if (selectedItemIds.size > 0 && drawingState.type === 'idle' && !isDragging) {
           e.preventDefault()
           e.stopImmediatePropagation()
-          const item = countItems.find((i) => i.id === selectedItemId)
-          if (item) {
-            clipboardRef.current = JSON.parse(JSON.stringify(item)) // Deep copy
-            console.log('Copied item:', item.id, item.geometry_type)
+          const items = countItems.filter((i) => selectedItemIds.has(i.id))
+          if (items.length > 0) {
+            clipboardRef.current = items.map((i) => JSON.parse(JSON.stringify(i)))
+            console.log('Copied items:', items.length)
           }
           return
         }
       }
       
       if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-        // Paste copied item with slight offset
+        // Paste copied item(s) with slight offset
         if (!clipboardRef.current || drawingState.type !== 'idle' || isDragging) return
         e.preventDefault()
         e.stopImmediatePropagation()
-        const src = clipboardRef.current
+        const srcItems = Array.isArray(clipboardRef.current) ? clipboardRef.current : [clipboardRef.current]
         const dx = sz(16)
         const dy = sz(16)
-        const newGeom = src.geometry.map(([nx, ny]) => {
-          const [x, y] = denorm(nx, ny)
-          return norm(x + dx, y + dy)
-        })
         const doPaste = async () => {
           try {
-            const base: Partial<CountItem> = {
-              count_definition: src.count_definition,
-              page: pageId,
-              geometry_type: src.geometry_type,
-              geometry: newGeom,
-              rotation_deg: src.rotation_deg ?? 0,
-            }
-            if (isCalibrated) {
-              if (src.geometry_type === 'polyline') {
-                base.length_ft = calcLength(newGeom)
-              } else if (src.geometry_type === 'polygon') {
-                base.area_sqft = calcArea(newGeom)
-                base.perimeter_ft = calcPerimeter(newGeom)
+            const createdItems: CountItem[] = []
+            for (let i = 0; i < srcItems.length; i++) {
+              const src = srcItems[i]
+              const newGeom = src.geometry.map((coord: number[]) => {
+                const [nx, ny] = coord
+                const [x, y] = denorm(nx, ny)
+                return norm(x + dx, y + dy)
+              })
+              const base: Partial<CountItem> = {
+                count_definition: src.count_definition,
+                page: pageId,
+                geometry_type: src.geometry_type,
+                geometry: newGeom,
+                rotation_deg: src.rotation_deg ?? 0,
               }
+              if (isCalibrated) {
+                if (src.geometry_type === 'polyline') {
+                  base.length_ft = calcLength(newGeom)
+                } else if (src.geometry_type === 'polygon') {
+                  base.area_sqft = calcArea(newGeom)
+                  base.perimeter_ft = calcPerimeter(newGeom)
+                }
+              }
+              const item = await trackedCreate(base as any)
+              createdItems.push(item)
             }
-            const item = await trackedCreate(base as any)
-            onCountItemCreated(item)
-            setSelectedItemId(item.id)
-            console.log('Pasted item:', item.id)
+            if (onCountItemsBatchCreated && createdItems.length > 1) {
+              onCountItemsBatchCreated(createdItems)
+            } else {
+              createdItems.forEach((item) => onCountItemCreated(item))
+            }
+            const nextIds = new Set(createdItems.map((i) => i.id))
+            selectedItemIdsRef.current = nextIds
+            setSelectedItemIds(nextIds)
           } catch (err) {
-            console.error('Paste item failed:', err)
+            console.error('Paste failed:', err)
             alert('Failed to paste: ' + (err as Error).message)
           }
         }
@@ -622,9 +749,13 @@ export default function ViewerCanvas({
           void finishPolyline(drawingState.vertices)
         else if (drawingState.type === 'drawing_polygon' && drawingState.vertices.length >= 3)
           void finishPolygon(drawingState.vertices)
+        else if (drawingState.type === 'drawing_circle_polygon')
+          setDrawingState({ type: 'idle' })
         else if (drawingState.type !== 'idle')
           setDrawingState({ type: 'idle' })
-        setSelectedItemId(null)
+        const empty = new Set<number>()
+        selectedItemIdsRef.current = empty
+        setSelectedItemIds(empty)
         setSelectedVertex(null)
       } else if (e.key === 'Enter') {
         // Finish both polylines AND polygons
@@ -634,28 +765,54 @@ export default function ViewerCanvas({
           void finishPolygon(drawingState.vertices)
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault()
+        if (isDragging || dragJustEndedRef.current || completingDragRef.current) return
+        if (Date.now() - lastDragActivityTimeRef.current < DRAG_DELETE_BLOCK_MS) return
+        if (selectedItemIds.size > 0 && anyRecentlyMoved(selectedItemIds)) return
         // During drawing: remove last vertex
         if (drawingState.type === 'drawing_polyline' || drawingState.type === 'drawing_polygon') {
           const v = drawingState.vertices
           if (v.length <= 1) setDrawingState({ type: 'idle' })
           else setDrawingState({ ...drawingState, vertices: v.slice(0, -1) })
-        } else if (drawingState.type === 'drawing_rect') {
+        } else if (drawingState.type === 'drawing_rect' || drawingState.type === 'drawing_circle_polygon') {
           setDrawingState({ type: 'idle' })
         } else if (selectedVertex) {
           void removeVertex(selectedVertex.itemId, selectedVertex.idx)
-        } else if (selectedItemId) {
-          void deleteItem(selectedItemId)
+        } else if (selectedItemIds.size > 0) {
+          void deleteItems(new Set(selectedItemIds))
         }
       } else if (e.key === 'r' || e.key === 'R') {
-        if (!e.ctrlKey && !e.metaKey && activeCount?.count_type === 'area_perimeter') {
-          e.preventDefault()
-          setRectPolygonMode(prev => !prev)
+        if (!e.ctrlKey && !e.metaKey) {
+          if (eraseMode) {
+            e.preventDefault()
+            setEraseFilter((prev) => (prev === 'rect' ? 'all' : 'rect'))
+          } else if (activeCount?.count_type === 'area_perimeter') {
+            e.preventDefault()
+            setRectPolygonMode((prev) => {
+              if (!prev) setCirclePolygonMode(false)
+              return !prev
+            })
+          }
+        }
+      } else if (e.key === 'c' || e.key === 'C') {
+        if (!e.ctrlKey && !e.metaKey) {
+          if (eraseMode) {
+            e.preventDefault()
+            setEraseFilter((prev) => (prev === 'circle' ? 'all' : 'circle'))
+            return
+          }
+          if (activeCount?.count_type === 'area_perimeter') {
+            e.preventDefault()
+            setCirclePolygonMode((prev) => {
+              if (!prev) setRectPolygonMode(false)
+              return !prev
+            })
+            return
+          }
+          setCPressed(true)
         }
       } else if (e.key === ' ') {
         e.preventDefault()
         setSpacePressed(true)
-      } else if (e.key === 'c' || e.key === 'C') {
-        if (!e.ctrlKey && !e.metaKey) setCPressed(true)
       } else if (
         drawingState.type === 'idle' &&
         !isDragging &&
@@ -672,8 +829,36 @@ export default function ViewerCanvas({
         else if (e.key === 'ArrowUp') dy = -delta
         else if (e.key === 'ArrowDown') dy = delta
 
-        if (selectedItemId != null) {
-          void offsetItemGeometry(selectedItemId, dx, dy)
+        if (selectedItemIds.size === 1) {
+          const id = Array.from(selectedItemIds)[0]
+          void offsetItemGeometry(id, dx, dy)
+        } else if (selectedItemIds.size > 1) {
+          void (async () => {
+            const batchUpdates: { id: number; item: CountItem }[] = []
+            for (const id of selectedItemIds) {
+              const item = countItemsRef.current.find((i) => i.id === id)
+              if (!item) continue
+              const newGeom = item.geometry.map(([nx, ny]) => {
+                const [x, y] = denorm(nx, ny)
+                return norm(x + dx, y + dy)
+              })
+              const updates: Partial<CountItem> = { geometry: newGeom }
+              if (isCalibrated) {
+                if (item.geometry_type === 'polyline') updates.length_ft = calcLength(newGeom)
+                else if (item.geometry_type === 'polygon') {
+                  updates.area_sqft = calcArea(newGeom)
+                  updates.perimeter_ft = calcPerimeter(newGeom)
+                }
+              }
+              const u = await trackedUpdate(id, updates)
+              batchUpdates.push({ id, item: u })
+            }
+            if (onCountItemsBatchMoved && batchUpdates.length > 0) {
+              onCountItemsBatchMoved(batchUpdates)
+            } else {
+              batchUpdates.forEach(({ item }) => onCountItemUpdated(item))
+            }
+          })()
         }
       }
     }
@@ -684,16 +869,40 @@ export default function ViewerCanvas({
     window.addEventListener('keydown', onDown, true)
     window.addEventListener('keyup', onUp, true)
     return () => { window.removeEventListener('keydown', onDown, true); window.removeEventListener('keyup', onUp, true) }
-  }, [drawingState, selectedItemId, selectedVertex, countItems, isCalibrated, pageId, sz, isDragging, onCountItemCreated, setSelectedItemId, finishPolyline, finishPolygon, removeVertex, deleteItem])
+  }, [drawingState, selectedItemIds, selectedVertex, countItems, isCalibrated, pageId, sz, isDragging, onCountItemCreated, finishPolyline, finishPolygon, removeVertex, deleteItem])
 
   /* ═══════════════════════════════════════════════════════════
    *  ACTIONS
    * ═══════════════════════════════════════════════════════════ */
 
   async function deleteItem(id: number) {
+    if (anyRecentlyMoved(id)) return
     try { await trackedDelete(id); onCountItemDeleted(id) }
     catch (err) { console.error('Delete failed:', err) }
-    setSelectedItemId(null); setSelectedVertex(null)
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      selectedItemIdsRef.current = next
+      return next
+    })
+    setSelectedVertex(null)
+  }
+
+  async function deleteItems(ids: Set<number>) {
+    if (anyRecentlyMoved(ids)) return
+    const idsArr = Array.from(ids)
+    try {
+      await Promise.all(idsArr.map((id) => trackedDelete(id)))
+      if (onCountItemsBatchDeleted) {
+        onCountItemsBatchDeleted(idsArr)
+      } else {
+        idsArr.forEach((id) => onCountItemDeleted(id))
+      }
+    } catch (err) { console.error('Batch delete failed:', err) }
+    const empty = new Set<number>()
+    selectedItemIdsRef.current = empty
+    setSelectedItemIds(empty)
+    setSelectedVertex(null)
   }
 
   async function removeVertex(itemId: number, vIdx: number) {
@@ -765,8 +974,14 @@ export default function ViewerCanvas({
   function handleStageMouseDown(e: any) {
     if (e.evt.button !== 0) return
     if (panMode || spacePressed) return
-    // Let Ctrl/Cmd + drag be handled by parent for pan (even when a count is selected).
     if (e.evt.ctrlKey || e.evt.metaKey) return
+
+    // Capture selection on mousedown so multi-drag uses it. Only overwrite when we have
+    // a non-empty selection (avoids clearing the "ids to move" after user clicks empty to deselect).
+    const refNow = selectedItemIdsRef.current
+    if (refNow.size > 0) {
+      selectedItemIdsAtDragStartRef.current = new Set(refNow)
+    }
 
     const pos = getCanvasPointer(e.evt)
     if (!pos) return
@@ -799,8 +1014,13 @@ export default function ViewerCanvas({
       return
     }
 
-    if (!activeCount) {
-      if (e.target === e.target.getStage()) { setSelectedItemId(null); setSelectedVertex(null) }
+    if (!activeCount && !eraseMode) {
+      if (e.target === e.target.getStage()) {
+        const empty = new Set<number>()
+        selectedItemIdsRef.current = empty
+        setSelectedItemIds(empty)
+        setSelectedVertex(null)
+      }
       return
     }
 
@@ -822,12 +1042,13 @@ export default function ViewerCanvas({
     }
 
     // "Each" type: always place a fixed-size point marker (no drag-to-resize)
-    if (activeCount.count_type === 'each' && drawingState.type === 'idle') {
+    if (activeCount && activeCount.count_type === 'each' && drawingState.type === 'idle') {
+      const def = activeCount
       const [nx, ny] = norm(pos.x, pos.y)
       void (async () => {
         try {
           const item = await trackedCreate({
-            count_definition: activeCount.id, page: pageId,
+            count_definition: def.id, page: pageId,
             geometry_type: 'point', geometry: [[nx, ny]],
           })
           onCountItemCreated(item)
@@ -837,7 +1058,8 @@ export default function ViewerCanvas({
     }
 
     // Rectangle polygon mode (R shortcut): 2-click rectangle for area_perimeter
-    if (rectPolygonMode && activeCount.count_type === 'area_perimeter') {
+    if (activeCount && rectPolygonMode && activeCount.count_type === 'area_perimeter') {
+      const def = activeCount
       const [nx, ny] = norm(pos.x, pos.y)
       if (drawingState.type === 'idle') {
         setDrawingState({ type: 'drawing_rect_polygon', start: [nx, ny] })
@@ -850,13 +1072,50 @@ export default function ViewerCanvas({
         void (async () => {
           try {
             const item = await trackedCreate({
-              count_definition: activeCount.id, page: pageId,
+              count_definition: def.id, page: pageId,
               geometry_type: 'polygon', geometry: vertices,
               area_sqft: isCalibrated ? calcArea(vertices) : null,
               perimeter_ft: isCalibrated ? calcPerimeter(vertices) : null,
             })
             onCountItemCreated(item)
           } catch (err) { console.error('Create rect polygon failed:', err) }
+        })()
+        setDrawingState({ type: 'idle' })
+        return
+      }
+    }
+
+    // Circle polygon mode (C shortcut): 2-click circle for area_perimeter
+    if (activeCount && circlePolygonMode && activeCount.count_type === 'area_perimeter') {
+      const def = activeCount
+      const [nx, ny] = norm(pos.x, pos.y)
+      if (drawingState.type === 'idle') {
+        setDrawingState({ type: 'drawing_circle_polygon', center: [nx, ny] })
+        return
+      } else if (drawingState.type === 'drawing_circle_polygon') {
+        const [cx, cy] = drawingState.center
+        const [dx, dy] = denorm(cx, cy)
+        const r = dist(dx, dy, pos.x, pos.y)
+        const segments = 32
+        const vertices: number[][] = []
+        for (let i = 0; i <= segments; i++) {
+          const angle = (i / segments) * 2 * Math.PI
+          const [vx, vy] = denorm(cx, cy)
+          const px = vx + r * Math.cos(angle)
+          const py = vy + r * Math.sin(angle)
+          vertices.push(norm(px, py))
+        }
+        vertices.push(vertices[0])
+        void (async () => {
+          try {
+            const item = await trackedCreate({
+              count_definition: def.id, page: pageId,
+              geometry_type: 'polygon', geometry: vertices,
+              area_sqft: isCalibrated ? calcArea(vertices) : null,
+              perimeter_ft: isCalibrated ? calcPerimeter(vertices) : null,
+            })
+            onCountItemCreated(item)
+          } catch (err) { console.error('Create circle polygon failed:', err) }
         })()
         setDrawingState({ type: 'idle' })
         return
@@ -963,10 +1222,54 @@ export default function ViewerCanvas({
     catch (err) { console.error('Vertex drag failed:', err) }
   }
 
+  const dragGuardActive = () => {
+    if (dragJustEndedRef.current || completingDragRef.current) return true
+    return Date.now() - lastDragActivityTimeRef.current < DRAG_DELETE_BLOCK_MS
+  }
+
+  /** True if any of the given ids were recently moved (block delete). */
+  const anyRecentlyMoved = (ids: Set<number> | number) => {
+    const set = typeof ids === 'number' ? new Set([ids]) : ids
+    for (const id of set) if (recentlyMovedIdsRef.current.has(id)) return true
+    return false
+  }
+
   function handleShapeClick(e: any, itemId: number) {
     e.cancelBubble = true
-    if (cPressed) void deleteItem(itemId)
-    else { setSelectedItemId(itemId); setSelectedVertex(null) }
+    if (dragGuardActive() && (cPressed || eraseMode)) return
+    if (anyRecentlyMoved(itemId)) return
+    if (eraseMode) {
+      if (dragGuardActive()) return
+      const item = countItems.find((i) => i.id === itemId)
+      if (!item) return
+      const uniqueVertCount = item.geometry_type === 'polygon' ? item.geometry.length - 1 : 0
+      const isRect = item.geometry_type === 'polygon' && (uniqueVertCount >= 3 && uniqueVertCount <= 6)
+      const isCircle = item.geometry_type === 'circle' || (item.geometry_type === 'polygon' && uniqueVertCount >= 16)
+      if (eraseFilter === 'all' || (eraseFilter === 'rect' && isRect) || (eraseFilter === 'circle' && isCircle)) {
+        void deleteItem(itemId)
+      }
+      return
+    }
+    if (cPressed && !dragGuardActive()) void deleteItem(itemId)
+    else {
+      const evt = e.evt || e
+      if (evt?.shiftKey) {
+        const next = new Set(selectedItemIds)
+        if (next.has(itemId)) next.delete(itemId)
+        else next.add(itemId)
+        selectedItemIdsRef.current = next
+        setSelectedItemIds(next)
+      } else {
+        if (selectedItemIds.has(itemId) && selectedItemIds.size > 1) {
+          setSelectedVertex(null)
+          return
+        }
+        const next = new Set([itemId])
+        selectedItemIdsRef.current = next
+        setSelectedItemIds(next)
+      }
+      setSelectedVertex(null)
+    }
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -975,6 +1278,7 @@ export default function ViewerCanvas({
 
   const cursorStyle =
     panMode || spacePressed ? 'grab'
+    : eraseMode ? 'crosshair'
     : noteMode ? 'crosshair'
     : isCalibrating ? 'crosshair'
     : isDrawingMode ? (activeCount!.count_type === 'each' ? 'crosshair' : 'none')
@@ -984,37 +1288,213 @@ export default function ViewerCanvas({
    *  DRAGGING ENTIRE ITEMS
    * ═══════════════════════════════════════════════════════════ */
 
-  function handleItemDragStart(itemId: number) {
+  /** Base position of an item's drag origin (for point: center; for rect/circle/triangle: center; for line/polygon: 0,0). */
+  function getItemBasePosition(item: CountItem): { x: number; y: number } {
+    if (item.geometry_type === 'point') {
+      const [x, y] = denorm(item.geometry[0][0], item.geometry[0][1])
+      return { x, y }
+    }
+    if (item.geometry_type === 'polyline' || item.geometry_type === 'polygon') {
+      return { x: 0, y: 0 }
+    }
+    if (item.geometry.length >= 2) {
+      const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
+      const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
+      return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 }
+    }
+    const [x, y] = denorm(item.geometry[0][0], item.geometry[0][1])
+    return { x, y }
+  }
+
+  function handleItemDragMove(e: any) {
+    if (selectedItemIdsAtDragStartRef.current.size <= 1) return
+    const node = e.target
+    if (!node) return
+    const startAbs = multiDragStartAbsoluteRef.current
+    if (startAbs) {
+      const abs = node.getAbsolutePosition?.() ?? node.position?.() ?? { x: 0, y: 0 }
+      const dx = (abs.x ?? 0) - startAbs.x
+      const dy = (abs.y ?? 0) - startAbs.y
+      multiDragOffsetRef.current = { dx, dy }
+      flushSync(() => setMultiDragOffset({ dx, dy }))
+      return
+    }
+    const itemId = draggedItemIdRef.current
+    if (itemId == null) return
+    const item = countItemsRef.current.find((i) => i.id === itemId)
+    if (!item) return
+    const base = getItemBasePosition(item)
+    const pos = node.position ? node.position() : { x: 0, y: 0 }
+    const dx = (pos.x ?? 0) - base.x
+    const dy = (pos.y ?? 0) - base.y
+    multiDragOffsetRef.current = { dx, dy }
+    flushSync(() => setMultiDragOffset({ dx, dy }))
+  }
+
+  function handleItemDragStart(itemId: number, e?: any) {
     setIsDragging(true)
-    setSelectedItemId(itemId)
+    completingDragRef.current = true
+    lastDragActivityTimeRef.current = Date.now()
+    const fromMouseDown = selectedItemIdsAtDragStartRef.current
+    const fromRef = selectedItemIdsRef.current
+    const fromState = selectedItemIds
+    const candidates = [fromMouseDown, fromRef, fromState]
+    const best = candidates.reduce((a, b) => (a.size >= b.size ? a : b))
+    const idsToMove = best.has(itemId) ? new Set(best) : new Set([itemId])
+    selectedItemIdsAtDragStartRef.current = idsToMove
+    if (idsToMove.size > 1) {
+      draggedItemIdRef.current = itemId
+      multiDragStartAbsoluteRef.current = e?.target?.getAbsolutePosition?.() ?? null
+      multiDragOffsetRef.current = { dx: 0, dy: 0 }
+      const bases = new Map<number, { x: number; y: number }>()
+      idsToMove.forEach((id) => {
+        const it = countItemsRef.current.find((i) => i.id === id)
+        if (it) bases.set(id, getItemBasePosition(it))
+      })
+      multiDragBasesRef.current = bases
+      setMultiDragOffset({ dx: 0, dy: 0 })
+      setSelectedVertex(null)
+      return
+    }
+    singleDragStartPosRef.current = e?.target?.getAbsolutePosition?.() ?? null
+    setSelectedItemIds((prev) => {
+      if (prev.has(itemId)) return prev
+      const next = new Set([itemId])
+      selectedItemIdsRef.current = next
+      return next
+    })
     setSelectedVertex(null)
   }
 
   async function handleItemDragEnd(itemId: number, e: any) {
-    setIsDragging(false)
-    const node = e.target.getParent ? e.target.getParent() : e.target
+    completingDragRef.current = true
+    lastDragActivityTimeRef.current = Date.now()
+    multiDragPointerStartRef.current = null
+    if (multiDragRafRef.current != null) {
+      cancelAnimationFrame(multiDragRafRef.current)
+      multiDragRafRef.current = null
+    }
+    draggedItemIdRef.current = null
+    dragJustEndedRef.current = true
+    const clearDragGuards = () => {
+      dragJustEndedRef.current = false
+      completingDragRef.current = false
+    }
+    setTimeout(clearDragGuards, DRAG_GUARD_MS)
+    // e.target is the dragged node (the Group) in Konva drag events
+    const node = e.target
     if (!node) return
     const pos = node.position ? node.position() : { x: 0, y: 0 }
-    const dx = pos.x || 0
-    const dy = pos.y || 0
-    // If there was effectively no movement, just reset the visual offset.
+    let idsToMove = selectedItemIdsAtDragStartRef.current.size > 0
+      ? selectedItemIdsAtDragStartRef.current
+      : (selectedItemIds.has(itemId) ? selectedItemIds : new Set([itemId]))
+    if (idsToMove.size <= 1 && selectedItemIds.size > 1 && selectedItemIds.has(itemId)) {
+      idsToMove = new Set(selectedItemIds)
+    }
+    // Delta: use absolute position when available so all types (rect, polygon, etc.) use same coordinate system
+    let dx: number
+    let dy: number
+    if (idsToMove.size > 1 && multiDragStartAbsoluteRef.current) {
+      const abs = node.getAbsolutePosition?.() ?? { x: pos.x ?? 0, y: pos.y ?? 0 }
+      dx = (abs.x ?? 0) - multiDragStartAbsoluteRef.current.x
+      dy = (abs.y ?? 0) - multiDragStartAbsoluteRef.current.y
+    } else if (idsToMove.size === 1 && singleDragStartPosRef.current) {
+      const abs = node.getAbsolutePosition?.() ?? { x: pos.x ?? 0, y: pos.y ?? 0 }
+      dx = (abs.x ?? 0) - singleDragStartPosRef.current.x
+      dy = (abs.y ?? 0) - singleDragStartPosRef.current.y
+    } else {
+      const draggedItem = countItemsRef.current.find((i) => i.id === itemId)
+      const base = draggedItem ? getItemBasePosition(draggedItem) : { x: 0, y: 0 }
+      dx = (pos.x ?? 0) - base.x
+      dy = (pos.y ?? 0) - base.y
+    }
+    // Clear visual offset only after state has committed (double rAF so parent re-render is done)
+    const clearOffsetNextFrame = () => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          multiDragOffsetRef.current = null
+          setMultiDragOffset(null)
+        })
+      })
+    }
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
-      if (node.position) node.position({ x: 0, y: 0 })
+      singleDragStartPosRef.current = null
+      multiDragBasesRef.current = new Map()
+      multiDragStartAbsoluteRef.current = null
+      multiDragOffsetRef.current = null
+      forceGroupZeroIdRef.current = null
+      setMultiDragOffset(null)
+      selectedItemIdsAtDragStartRef.current = new Set()
+      setIsDragging(false)
       return
     }
-    // CRITICAL: Update server and state FIRST - wait for it to complete
-    // The offsetItemGeometry function already waits for state updates, so we don't need additional delay here
-    try {
-      await offsetItemGeometry(itemId, dx, dy)
-      // NOW reset visual offset after state is fully updated and component has re-rendered
-      // The geometry in state is now updated, so Konva will render at the new position
-      if (node.position) node.position({ x: 0, y: 0 })
-    } catch (err) {
-      console.error('Failed to save item position:', err)
-      alert('Failed to save position: ' + (err as Error).message)
-      // Reset visual offset even on error
-      if (node.position) node.position({ x: 0, y: 0 })
+    const markMovedAndClearBases = () => {
+      idsToMove.forEach((id) => recentlyMovedIdsRef.current.add(id))
+      setTimeout(() => {
+        recentlyMovedIdsRef.current.clear()
+      }, RECENTLY_MOVED_BLOCK_MS)
+      singleDragStartPosRef.current = null
+      multiDragBasesRef.current = new Map()
+      multiDragStartAbsoluteRef.current = null
+      multiDragOffsetRef.current = null
+      forceGroupZeroIdRef.current = null
     }
+    const draggedIsLineOrPoly = (() => {
+      const it = countItemsRef.current.find((i) => i.id === itemId)
+      return it && (it.geometry_type === 'polyline' || it.geometry_type === 'polygon')
+    })()
+    if (draggedIsLineOrPoly) forceGroupZeroIdRef.current = itemId
+    if (idsToMove.size === 1) {
+      try {
+        await offsetItemGeometry(itemId, dx, dy)
+        markMovedAndClearBases()
+        clearOffsetNextFrame()
+      } catch (err) {
+        console.error('Failed to save item position:', err)
+        singleDragStartPosRef.current = null
+        forceGroupZeroIdRef.current = null
+        setMultiDragOffset(null)
+      }
+    } else {
+      try {
+        const batchUpdates: { id: number; item: CountItem }[] = []
+        for (const id of idsToMove) {
+          const item = countItemsRef.current.find((i) => i.id === id)
+          if (!item) continue
+          const newGeom = item.geometry.map(([nx, ny]) => {
+            const [x, y] = denorm(nx, ny)
+            return norm(x + dx, y + dy)
+          })
+          const updates: Partial<CountItem> = { geometry: newGeom }
+          if (isCalibrated) {
+            if (item.geometry_type === 'polyline') updates.length_ft = calcLength(newGeom)
+            else if (item.geometry_type === 'polygon') {
+              updates.area_sqft = calcArea(newGeom)
+              updates.perimeter_ft = calcPerimeter(newGeom)
+            }
+          }
+          const u = await trackedUpdate(id, updates)
+          batchUpdates.push({ id, item: { ...u, geometry: newGeom.map((c) => [...c]) } })
+        }
+        if (onCountItemsBatchMoved && batchUpdates.length > 0) {
+          onCountItemsBatchMoved(batchUpdates)
+        } else {
+          batchUpdates.forEach(({ item }) => onCountItemUpdated(item))
+        }
+        markMovedAndClearBases()
+        clearOffsetNextFrame()
+      } catch (err) {
+        console.error('Failed to save item positions:', err)
+        multiDragBasesRef.current = new Map()
+        multiDragStartAbsoluteRef.current = null
+        multiDragOffsetRef.current = null
+        forceGroupZeroIdRef.current = null
+        setMultiDragOffset(null)
+      }
+    }
+    selectedItemIdsAtDragStartRef.current = new Set()
+    forceGroupZeroIdRef.current = null
+    setIsDragging(false)
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1094,9 +1574,38 @@ export default function ViewerCanvas({
   const markerSize = Math.min(width, height) * 0.04
   const markerStroke = Math.max(1, markerSize * 0.04)
 
-  function renderMarker(item: CountItem, def: CountDefinition) {
-    const [x, y] = denorm(item.geometry[0][0], item.geometry[0][1])
-    const isSel = selectedItemId === item.id
+  function MarkerImageScaled({ src, size, isSel, stroke, common }: { src: string; size: number; isSel: boolean; stroke: string; common: object }) {
+    const [img, setImg] = useState<HTMLImageElement | null>(null)
+    useEffect(() => {
+      if (!src) return
+      const i = new window.Image();
+      (i as any).crossOrigin = 'anonymous'
+      i.onload = () => setImg(i)
+      i.onerror = () => setImg(null)
+      i.src = src
+      return () => { i.src = '' }
+    }, [src])
+    if (!img) {
+      return <Rect x={-size / 2} y={-size / 2} width={size} height={size} fill="#eee" stroke="#999" strokeWidth={1} {...common} />
+    }
+    const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight)
+    const w = img.naturalWidth * scale
+    const h = img.naturalHeight * scale
+    return (
+      <>
+        <Image image={img} x={-w / 2} y={-h / 2} width={w} height={h} {...common} />
+        {isSel && <Rect x={-size / 2} y={-size / 2} width={size} height={size} stroke={stroke} strokeWidth={markerStroke} listening={false} />}
+      </>
+    )
+  }
+
+  function renderMarker(item: CountItem, def: CountDefinition, dragOffset?: { dx: number; dy: number } | null, effectiveBase?: { x: number; y: number } | null) {
+    const [rawX, rawY] = denorm(item.geometry[0][0], item.geometry[0][1])
+    const ox = dragOffset?.dx ?? 0
+    const oy = dragOffset?.dy ?? 0
+    const gx = (effectiveBase?.x ?? rawX) + ox
+    const gy = (effectiveBase?.y ?? rawY) + oy
+    const isSel = selectedItemIds.has(item.id)
     const size = markerSize
     const sw = markerStroke
     const hit = S.hit
@@ -1106,10 +1615,14 @@ export default function ViewerCanvas({
     const common = { onClick: click, hitStrokeWidth: hit }
     const fill = def.color + '30'
     const stroke = isSel ? SEL_COLOR : def.color
-    
-    // Render marker centered at origin for rotation
+    const imageUrl = (def.shape === 'image' && (def.shape_image_url?.trim() ?? ''))
+      ? (def.shape_image_url!.startsWith('http') ? def.shape_image_url! : `${MEDIA_BASE}/${def.shape_image_url}`)
+      : null
+
     const marker =
-      def.shape === 'circle' ? (
+      imageUrl ? (
+        <MarkerImageScaled src={imageUrl} size={size} isSel={isSel} stroke={stroke} common={common} />
+      ) : def.shape === 'circle' ? (
         <Circle x={0} y={0} radius={size / 2} fill={fill} stroke={stroke} strokeWidth={sw} {...common} />
       ) : def.shape === 'triangle' ? (
         <RegularPolygon
@@ -1136,7 +1649,6 @@ export default function ViewerCanvas({
         />
       )
 
-    // Rotation handle scales proportionally with the marker.
     const markerHandleOffset = size * 0.6
     const rotHandle = isSel ? (
       <Circle
@@ -1154,7 +1666,7 @@ export default function ViewerCanvas({
           if (!stage) return
           const pointer = stage.getPointerPosition()
           if (!pointer) return
-          const angle = Math.atan2(pointer.x - x, -(pointer.y - y)) * (180 / Math.PI)
+          const angle = Math.atan2(pointer.x - gx, -(pointer.y - gy)) * (180 / Math.PI)
           const updates: Partial<CountItem> = { rotation_deg: Math.round(angle) }
           void trackedUpdate(item.id, updates).then((u) => onCountItemUpdated(u)).catch(() => {})
           e.target.x(0)
@@ -1169,11 +1681,14 @@ export default function ViewerCanvas({
     return (
       <Group
         key={item.id}
-        x={x}
-        y={y}
+        x={gx}
+        y={gy}
         rotation={rotDeg}
         draggable
-        onDragStart={() => handleItemDragStart(item.id)}
+        dragDistance={DRAG_DISTANCE_PX}
+        onMouseDown={() => { const r = selectedItemIdsRef.current; if (r.size > 0) selectedItemIdsAtDragStartRef.current = new Set(r) }}
+        onDragStart={(ev) => handleItemDragStart(item.id, ev)}
+        onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
         {marker}
@@ -1186,11 +1701,11 @@ export default function ViewerCanvas({
    *  RENDER: Rectangle (drag-drawn "Each" items)
    * ═══════════════════════════════════════════════════════════ */
 
-  function renderRect(item: CountItem, def: CountDefinition) {
+  function renderRect(item: CountItem, def: CountDefinition, dragOffset?: { dx: number; dy: number } | null, effectiveBase?: { x: number; y: number } | null) {
     if (item.geometry.length < 2) return null
     const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
     const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
-    const isSel = selectedItemId === item.id
+    const isSel = selectedItemIds.has(item.id)
     const sw = sz(isSel ? 20 : 16)
 
     const rx = Math.min(x1, x2)
@@ -1199,17 +1714,23 @@ export default function ViewerCanvas({
     const rh = Math.abs(y2 - y1)
     const rotDeg = item.rotation_deg ?? 0
     const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2
+    const ox = dragOffset?.dx ?? 0
+    const oy = dragOffset?.dy ?? 0
+    const base = effectiveBase ?? { x: cx, y: cy }
 
     return (
       <Group
         key={item.id}
         rotation={rotDeg}
-        x={cx}
-        y={cy}
+        x={base.x + ox}
+        y={base.y + oy}
         offsetX={cx}
         offsetY={cy}
         draggable
-        onDragStart={() => handleItemDragStart(item.id)}
+        dragDistance={DRAG_DISTANCE_PX}
+        onMouseDown={() => { const r = selectedItemIdsRef.current; if (r.size > 0) selectedItemIdsAtDragStartRef.current = new Set(r) }}
+        onDragStart={(ev) => handleItemDragStart(item.id, ev)}
+        onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
         <Rect
@@ -1229,11 +1750,11 @@ export default function ViewerCanvas({
    *  RENDER: Circle / Ellipse (drag-drawn "Each" items with circle shape)
    * ═══════════════════════════════════════════════════════════ */
 
-  function renderCircleShape(item: CountItem, def: CountDefinition) {
+  function renderCircleShape(item: CountItem, def: CountDefinition, dragOffset?: { dx: number; dy: number } | null, effectiveBase?: { x: number; y: number } | null) {
     if (item.geometry.length < 2) return null
     const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
     const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
-    const isSel = selectedItemId === item.id
+    const isSel = selectedItemIds.has(item.id)
     const sw = sz(isSel ? 20 : 16)
 
     const cx = (x1 + x2) / 2
@@ -1242,17 +1763,23 @@ export default function ViewerCanvas({
     const ry = Math.abs(y2 - y1) / 2
     const rotDeg = item.rotation_deg ?? 0
     const topY = cy - Math.max(rx, ry)
+    const ox = dragOffset?.dx ?? 0
+    const oy = dragOffset?.dy ?? 0
+    const base = effectiveBase ?? { x: cx, y: cy }
 
     return (
       <Group
         key={item.id}
         rotation={rotDeg}
-        x={cx}
-        y={cy}
+        x={base.x + ox}
+        y={base.y + oy}
         offsetX={cx}
         offsetY={cy}
         draggable
-        onDragStart={() => handleItemDragStart(item.id)}
+        dragDistance={DRAG_DISTANCE_PX}
+        onMouseDown={() => { const r = selectedItemIdsRef.current; if (r.size > 0) selectedItemIdsAtDragStartRef.current = new Set(r) }}
+        onDragStart={(ev) => handleItemDragStart(item.id, ev)}
+        onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
         <Ellipse
@@ -1308,11 +1835,11 @@ export default function ViewerCanvas({
    *  RENDER: Triangle (drag-drawn "Each" items with triangle shape)
    * ═══════════════════════════════════════════════════════════ */
 
-  function renderTriangleShape(item: CountItem, def: CountDefinition) {
+  function renderTriangleShape(item: CountItem, def: CountDefinition, dragOffset?: { dx: number; dy: number } | null, effectiveBase?: { x: number; y: number } | null) {
     if (item.geometry.length < 2) return null
     const [x1, y1] = denorm(item.geometry[0][0], item.geometry[0][1])
     const [x2, y2] = denorm(item.geometry[1][0], item.geometry[1][1])
-    const isSel = selectedItemId === item.id
+    const isSel = selectedItemIds.has(item.id)
     const sw = sz(isSel ? 20 : 16)
     const midX = (x1 + x2) / 2
     const topY = Math.min(y1, y2)
@@ -1320,17 +1847,23 @@ export default function ViewerCanvas({
 
     const rotDeg = item.rotation_deg ?? 0
     const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2
+    const ox = dragOffset?.dx ?? 0
+    const oy = dragOffset?.dy ?? 0
+    const base = effectiveBase ?? { x: cx, y: cy }
 
     return (
       <Group
         key={item.id}
         rotation={rotDeg}
-        x={cx}
-        y={cy}
+        x={base.x + ox}
+        y={base.y + oy}
         offsetX={cx}
         offsetY={cy}
         draggable
-        onDragStart={() => handleItemDragStart(item.id)}
+        dragDistance={DRAG_DISTANCE_PX}
+        onMouseDown={() => { const r = selectedItemIdsRef.current; if (r.size > 0) selectedItemIdsAtDragStartRef.current = new Set(r) }}
+        onDragStart={(ev) => handleItemDragStart(item.id, ev)}
+        onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
         <Line points={triPts} closed
@@ -1348,14 +1881,17 @@ export default function ViewerCanvas({
    *  RENDER: Polyline (Linear Feet)
    * ═══════════════════════════════════════════════════════════ */
 
-  function renderPolyline(item: CountItem, def: CountDefinition) {
+  function renderPolyline(item: CountItem, def: CountDefinition, dragOffset?: { dx: number; dy: number } | null, _effectiveBase?: { x: number; y: number } | null) {
+    const ox = dragOffset?.dx ?? 0
+    const oy = dragOffset?.dy ?? 0
     const pts: number[] = []
     const cVerts: [number, number][] = []
     item.geometry.forEach(([nx, ny]) => {
       const [x, y] = denorm(nx, ny)
-      pts.push(x, y); cVerts.push([x, y])
+      pts.push(x + ox, y + oy)
+      cVerts.push([x + ox, y + oy])
     })
-    const isSel = selectedItemId === item.id
+    const isSel = selectedItemIds.has(item.id)
     const lw = sz(isSel ? S.lineW + 1 : S.lineW)
     const vr = sz(S.vert)
     const vrH = sz(S.vertHover)
@@ -1365,19 +1901,25 @@ export default function ViewerCanvas({
     const [startX, startY] = cVerts.length > 0 ? cVerts[0] : [0, 0]
     const totalLabel = isCalibrated ? `Total: ${formatFt(totalFt)}` : 'Total: —'
 
+    const forceZero = forceGroupZeroIdRef.current === item.id
     return (
       <Group
         key={item.id}
+        x={forceZero ? 0 : (isDragging ? undefined : 0)}
+        y={forceZero ? 0 : (isDragging ? undefined : 0)}
         draggable
-        onDragStart={() => handleItemDragStart(item.id)}
+        dragDistance={DRAG_DISTANCE_PX}
+        onMouseDown={() => { const r = selectedItemIdsRef.current; if (r.size > 0) selectedItemIdsAtDragStartRef.current = new Set(r) }}
+        onDragStart={(ev) => handleItemDragStart(item.id, ev)}
+        onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
         {/* Hit area */}
         <Line points={pts} stroke="transparent" strokeWidth={sz(S.hit)}
-          lineCap="round" lineJoin="round" onClick={(e: any) => handleShapeClick(e, item.id)} />
+          lineCap="round" lineJoin="round" onClick={(e: any) => handleShapeClick(e, item.id)} onDblClick={(e: any) => handleLineDblClick(item.id, e)} />
         {/* Visible line */}
         <Line points={pts} stroke={isSel ? SEL_COLOR : def.color} strokeWidth={lw}
-          lineCap="round" lineJoin="round" onClick={(e: any) => handleShapeClick(e, item.id)} />
+          lineCap="round" lineJoin="round" onClick={(e: any) => handleShapeClick(e, item.id)} onDblClick={(e: any) => handleLineDblClick(item.id, e)} />
 
         {/* Per-segment length labels (only when selected and calibrated) */}
         {isCalibrated && isSel && cVerts.length >= 2 && cVerts.map(([x, y], i) => {
@@ -1396,14 +1938,20 @@ export default function ViewerCanvas({
           const hov = hoveredVertex?.itemId === item.id && hoveredVertex?.idx === idx
           const sel = selectedVertex?.itemId === item.id && selectedVertex?.idx === idx
           return (
-            <Circle key={`v${idx}`} x={vx} y={vy}
+            <Circle key={`v${idx}`} x={vx + ox} y={vy + oy}
               radius={hov || sel ? vrH : vr}
               fill={hov ? 'rgba(0,0,0,0.7)' : sel ? '#fff' : 'rgba(255,255,255,0.8)'}
               stroke={def.color} strokeWidth={vs}
               draggable
               onDragStart={() => { setIsDragging(true) }}
               onDragEnd={(e) => handleVertexDragEnd(item.id, idx, { x: e.target.x(), y: e.target.y() })}
-              onClick={(e) => { e.cancelBubble = true; setSelectedItemId(item.id); setSelectedVertex({ itemId: item.id, idx }) }}
+              onClick={(e) => {
+                e.cancelBubble = true
+                const next = new Set([item.id])
+                selectedItemIdsRef.current = next
+                setSelectedItemIds(next)
+                setSelectedVertex({ itemId: item.id, idx })
+              }}
               onMouseEnter={(e) => { setHoveredVertex({ itemId: item.id, idx }); e.target.getStage()!.container().style.cursor = 'move' }}
               onMouseLeave={(e) => { setHoveredVertex(null); e.target.getStage()!.container().style.cursor = '' }}
             />
@@ -1417,15 +1965,18 @@ export default function ViewerCanvas({
    *  RENDER: Polygon (Area & Perimeter)
    * ═══════════════════════════════════════════════════════════ */
 
-  function renderPolygon(item: CountItem, def: CountDefinition) {
+  function renderPolygon(item: CountItem, def: CountDefinition, dragOffset?: { dx: number; dy: number } | null, _effectiveBase?: { x: number; y: number } | null) {
+    const ox = dragOffset?.dx ?? 0
+    const oy = dragOffset?.dy ?? 0
     const uniqueVerts = item.geometry.slice(0, -1)
     const pts: number[] = []
     const cVerts: [number, number][] = []
     uniqueVerts.forEach(([nx, ny]) => {
       const [x, y] = denorm(nx, ny)
-      pts.push(x, y); cVerts.push([x, y])
+      pts.push(x + ox, y + oy)
+      cVerts.push([x + ox, y + oy])
     })
-    const isSel = selectedItemId === item.id
+    const isSel = selectedItemIds.has(item.id)
     const pw = sz(isSel ? S.polyW + 1 : S.polyW)
     const vr = sz(S.vert)
     const vrH = sz(S.vertHover)
@@ -1437,11 +1988,21 @@ export default function ViewerCanvas({
     const areaLabel = isCalibrated ? formatSqft(areaVal) : '—'
     const perimLabel = isCalibrated ? formatFt(perimVal) : '—'
 
+    const isCirclePolygon = uniqueVerts.length >= 16
+    const labelCx = cx + ox
+    const labelCy = cy + oy
+    const forceZero = forceGroupZeroIdRef.current === item.id
+
     return (
       <Group
         key={item.id}
+        x={forceZero ? 0 : (isDragging ? undefined : 0)}
+        y={forceZero ? 0 : (isDragging ? undefined : 0)}
         draggable
-        onDragStart={() => handleItemDragStart(item.id)}
+        dragDistance={DRAG_DISTANCE_PX}
+        onMouseDown={() => { const r = selectedItemIdsRef.current; if (r.size > 0) selectedItemIdsAtDragStartRef.current = new Set(r) }}
+        onDragStart={(ev) => handleItemDragStart(item.id, ev)}
+        onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
         {/* Filled polygon */}
@@ -1449,36 +2010,44 @@ export default function ViewerCanvas({
           fill={def.color + (isSel ? '50' : '30')}
           stroke={isSel ? SEL_COLOR : def.color} strokeWidth={pw}
           lineCap="round" lineJoin="round"
+          tension={isCirclePolygon ? 0 : 0}
           onClick={(e: any) => handleShapeClick(e, item.id)}
+          onDblClick={isCirclePolygon ? undefined : (e: any) => handleLineDblClick(item.id, e)}
           hitStrokeWidth={sz(S.hit)}
         />
 
-        {/* Per-segment length labels (only when selected and calibrated) */}
-        {isCalibrated && isSel && cVerts.length >= 2 && cVerts.map(([x, y], i) => {
+        {/* Per-segment length labels (only when selected, calibrated, and NOT a circle polygon) */}
+        {!isCirclePolygon && isCalibrated && isSel && cVerts.length >= 2 && cVerts.map(([x, y], i) => {
           const next = cVerts[(i + 1) % cVerts.length]
           return <React.Fragment key={`pseg-${i}`}>
             {renderSegLabel(x, y, next[0], next[1], def.color)}
           </React.Fragment>
         })}
 
-        {/* Area & perimeter labels at centroid – always show text, but with transparent bg to avoid a solid box */}
-        {renderTag(areaLabel, cx, cy, 'transparent', '#111827', S.fontSm)}
-        {renderTag(perimLabel, cx, cy, 'transparent', '#111827', S.fontSm, 20)}
+        {/* Area & perimeter labels at centroid */}
+        {renderTag(areaLabel, labelCx, labelCy, 'transparent', '#111827', S.fontSm)}
+        {renderTag(perimLabel, labelCx, labelCy, 'transparent', '#111827', S.fontSm, 20)}
 
-        {/* Vertex handles */}
-        {uniqueVerts.map(([nx, ny], idx) => {
+        {/* Vertex handles — hidden for circle polygons (smooth circle) */}
+        {!isCirclePolygon && uniqueVerts.map(([nx, ny], idx) => {
           const [vx, vy] = denorm(nx, ny)
           const hov = hoveredVertex?.itemId === item.id && hoveredVertex?.idx === idx
           const sel = selectedVertex?.itemId === item.id && selectedVertex?.idx === idx
           return (
-            <Circle key={`v${idx}`} x={vx} y={vy}
+            <Circle key={`v${idx}`} x={vx + ox} y={vy + oy}
               radius={hov || sel ? vrH : vr}
               fill={hov ? 'rgba(0,0,0,0.7)' : sel ? '#fff' : 'rgba(255,255,255,0.8)'}
               stroke={def.color} strokeWidth={vs}
               draggable
               onDragStart={() => { setIsDragging(true) }}
               onDragEnd={(e) => handleVertexDragEnd(item.id, idx, { x: e.target.x(), y: e.target.y() })}
-              onClick={(e) => { e.cancelBubble = true; setSelectedItemId(item.id); setSelectedVertex({ itemId: item.id, idx }) }}
+              onClick={(e) => {
+                e.cancelBubble = true
+                const next = new Set([item.id])
+                selectedItemIdsRef.current = next
+                setSelectedItemIds(next)
+                setSelectedVertex({ itemId: item.id, idx })
+              }}
               onMouseEnter={(e) => { setHoveredVertex({ itemId: item.id, idx }); e.target.getStage()!.container().style.cursor = 'move' }}
               onMouseLeave={(e) => { setHoveredVertex(null); e.target.getStage()!.container().style.cursor = '' }}
             />
@@ -1547,7 +2116,20 @@ export default function ViewerCanvas({
       )
     }
 
-    if (drawingState.type === 'idle' || drawingState.type === 'drawing_rect' || drawingState.type === 'drawing_rect_polygon' || !activeCount) return null
+    // Circle polygon preview (2-click circle for area_perimeter)
+    if (drawingState.type === 'drawing_circle_polygon' && cursorPos && activeCount) {
+      const [cx, cy] = denorm(drawingState.center[0], drawingState.center[1])
+      const r = dist(cx, cy, cursorPos.x, cursorPos.y)
+      const col = activeCount.color
+      return (
+        <Group listening={false}>
+          <Circle x={cx} y={cy} radius={r}
+            fill={col + '30'} stroke={col} strokeWidth={sz(2)} dash={[sz(6), sz(4)]} />
+        </Group>
+      )
+    }
+
+    if (drawingState.type === 'idle' || drawingState.type === 'drawing_rect' || drawingState.type === 'drawing_rect_polygon' || drawingState.type === 'drawing_circle_polygon' || !activeCount) return null
     const verts = drawingState.vertices
     if (verts.length === 0) return null
 
@@ -1801,17 +2383,32 @@ export default function ViewerCanvas({
         onMouseUp={handleStageMouseUp}
         style={{ cursor: cursorStyle }}
       >
-        {/* Layer 1: interactive shapes */}
-        <Layer>
+        {/* Layer 1: interactive shapes — capture selection on mousedown so multi-drag has correct set */}
+        <Layer
+          onMouseDown={() => {
+            const refNow = selectedItemIdsRef.current
+            if (refNow.size > 0) {
+              selectedItemIdsAtDragStartRef.current = new Set(refNow)
+            }
+          }}
+        >
           {visibleItems.map((item) => {
             const def = countDefinitions.find((d) => d.id === item.count_definition)
             if (!def) return null
-            if (item.geometry_type === 'point') return renderMarker(item, def)
-            if (item.geometry_type === 'rect') return renderRect(item, def)
-            if (item.geometry_type === 'circle') return renderCircleShape(item, def)
-            if (item.geometry_type === 'triangle') return renderTriangleShape(item, def)
-            if (item.geometry_type === 'polyline') return renderPolyline(item, def)
-            if (item.geometry_type === 'polygon') return renderPolygon(item, def)
+            const idsAtStart = selectedItemIdsAtDragStartRef.current
+            const isMultiDrag = (multiDragOffsetRef.current ?? multiDragOffset) && idsAtStart.size > 1
+            const isDraggedItem = draggedItemIdRef.current === item.id
+            const offsetValue = multiDragOffsetRef.current ?? multiDragOffset
+            const dragOffset = (isMultiDrag && idsAtStart.has(item.id) && !isDraggedItem) ? offsetValue : null
+            const effectiveBase = (isMultiDrag && idsAtStart.has(item.id) && !isDraggedItem && multiDragBasesRef.current.size > 0)
+              ? (multiDragBasesRef.current.get(item.id) ?? getItemBasePosition(item))
+              : null
+            if (item.geometry_type === 'point') return renderMarker(item, def, dragOffset, effectiveBase)
+            if (item.geometry_type === 'rect') return renderRect(item, def, dragOffset, effectiveBase)
+            if (item.geometry_type === 'circle') return renderCircleShape(item, def, dragOffset, effectiveBase)
+            if (item.geometry_type === 'triangle') return renderTriangleShape(item, def, dragOffset, effectiveBase)
+            if (item.geometry_type === 'polyline') return renderPolyline(item, def, dragOffset, effectiveBase)
+            if (item.geometry_type === 'polygon') return renderPolygon(item, def, dragOffset, effectiveBase)
             return null
           })}
           {renderDrawingInProgress()}

@@ -94,6 +94,8 @@ export type PlanPage = {
   page_number: number
   title: string
   image: string
+  /** Second background (e.g. satellite view); same scale as image. */
+  image_alt?: string | null
   plan_set: number
   dpi_x?: number | null
   dpi_y?: number | null
@@ -144,6 +146,7 @@ export type CountDefinition = {
   count_type: 'area_perimeter' | 'linear_feet' | 'each'
   color: string
   shape: string
+  shape_image_url?: string | null
   trade: string
   plan_set: number
 }
@@ -323,6 +326,21 @@ export async function uploadPlanSet(
 export async function fetchPlanSet(id: number): Promise<PlanSet> {
   const res = await fetch(`${API_BASE}/plan-sets/${id}/`)
   if (!res.ok) throw new Error('Failed to load plan set')
+  return res.json()
+}
+
+/** Upload second background image for a page (e.g. satellite view). Accepts image (jpg/png/...) or PDF (first page as PNG). */
+export async function uploadPlanPageAlt(pageId: number, file: File): Promise<PlanPage> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API_BASE}/pages/${pageId}/upload_alt/`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Failed to upload alternate image')
+  }
   return res.json()
 }
 

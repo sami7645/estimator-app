@@ -89,6 +89,7 @@ class PlanPage(TimeStampedModel):
     page_number = models.PositiveIntegerField()
     title = models.CharField(max_length=255, blank=True)
     image = models.ImageField(upload_to="plans/pages/")
+    image_alt = models.ImageField(upload_to="plans/pages_alt/", blank=True, null=True)  # e.g. satellite view, same scale
     # Stored rendering resolution (dots per inch) for this page image.
     # We render PDF pages using PyMuPDF at a fixed zoom, so knowing the
     # effective DPI lets the frontend derive a pixel-to-feet scale directly
@@ -116,7 +117,8 @@ class CountDefinition(TimeStampedModel):
     name = models.CharField(max_length=255)
     count_type = models.CharField(max_length=32, choices=CountType.choices)
     color = models.CharField(max_length=32, default="#00ff00")
-    shape = models.CharField(max_length=16, blank=True)  # for EACH: square/circle/triangle
+    shape = models.CharField(max_length=16, blank=True)  # for EACH: square/circle/triangle or 'image'
+    shape_image_url = models.URLField(max_length=1000, blank=True, null=True)  # optional JPEG/PNG for "each"
     trade = models.CharField(max_length=32, choices=Trade.choices, default=Trade.OTHER)
 
     def __str__(self) -> str:
