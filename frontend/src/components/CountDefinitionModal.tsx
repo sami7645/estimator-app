@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import type { CountDefinition } from '../api'
 import { createCountDefinition, updateCountDefinition } from '../api'
 import './CountDefinitionModal.css'
@@ -46,10 +46,9 @@ export default function CountDefinitionModal({
     countDefinition?.count_type || 'each'
   )
   const [color, setColor] = useState(countDefinition?.color || '#00ff00')
-  const [shape, setShape] = useState<'square' | 'circle' | 'triangle' | 'image'>(
-    (countDefinition?.shape_image_url ? 'image' : (countDefinition?.shape as any)) || 'square'
+  const [shape, setShape] = useState<'square' | 'circle' | 'triangle'>(
+    (countDefinition?.shape as any) || 'square'
   )
-  const [shapeImageUrl, setShapeImageUrl] = useState(countDefinition?.shape_image_url ?? '')
   const [trade, setTrade] = useState(countDefinition?.trade ?? preset.trade)
   const [customColor, setCustomColor] = useState('')
 
@@ -70,7 +69,7 @@ export default function CountDefinitionModal({
       }
       if (countType === 'each') {
         data.shape = shape
-        data.shape_image_url = shape === 'image' && shapeImageUrl.trim() ? shapeImageUrl.trim() : null
+        data.shape_image_url = null
       }
 
       let result: CountDefinition
@@ -178,26 +177,7 @@ export default function CountDefinitionModal({
                 >
                   △ Triangle
                 </button>
-                <button
-                  type="button"
-                  className={`shape-btn ${shape === 'image' ? 'active' : ''}`}
-                  onClick={() => setShape('image')}
-                >
-                  🖼 Image
-                </button>
               </div>
-              {shape === 'image' && (
-                <div className="form-group" style={{ marginTop: 8 }}>
-                  <label>Image URL (JPEG/PNG)</label>
-                  <input
-                    type="url"
-                    value={shapeImageUrl}
-                    onChange={(e) => setShapeImageUrl(e.target.value)}
-                    placeholder="https://… or /media/…"
-                    style={{ width: '100%', padding: 6 }}
-                  />
-                </div>
-              )}
             </div>
           )}
 

@@ -6,7 +6,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.db import transaction
 from django.conf import settings
 from django.http import HttpResponse
-from django.db.models import Q
+from django.db.models import Q, Max
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
@@ -15,6 +15,7 @@ from pathlib import Path
 from io import BytesIO
 import tempfile
 from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from openpyxl import Workbook
 import math
 
@@ -22,6 +23,7 @@ from .models import (
     Project,
     PlanSet,
     PlanPage,
+    PlanPageOverlay,
     CountDefinition,
     CountItem,
     ScaleCalibration,
@@ -169,11 +171,35 @@ class PlanPageViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = PlanPageSerializer
     parser_classes = [MultiPartParser, FormParser] + list(viewsets.ReadOnlyModelViewSet.parser_classes)
 
+    def _save_uploaded_alt_image(self, page, file, is_pdf):
+        """Save uploaded file as image. Returns (image_field_value,). For PlanPage.image_alt or PlanPageOverlay.image."""
+        if is_pdf:
+            raw = file.read()
+            doc = fitz.open(stream=raw, filetype="pdf")
+            if len(doc) == 0:
+                doc.close()
+                raise ValueError("PDF has no pages.")
+            first_page = doc.load_page(0)
+            zoom_x, zoom_y = 2.0, 2.0
+            pix = first_page.get_pixmap(matrix=fitz.Matrix(zoom_x, zoom_y))
+            doc.close()
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                pix.save(tmp.name)
+                with open(tmp.name, "rb") as f:
+                    content = ContentFile(f.read())
+            Path(tmp.name).unlink(missing_ok=True)
+            return content, f"page_{page.id}_alt.png"
+        save_name = file.name or f"page_{page.id}_alt.png"
+        if not save_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            save_name = f"page_{page.id}_alt.png"
+        return file, save_name
+
     @action(detail=True, methods=["post"])
     def upload_alt(self, request, pk=None):
         """
-        Upload a second background image for this page (e.g. satellite view).
-        Accepts: image (jpg/png/jpeg etc) or PDF (first page converted to PNG). Same scale as primary image.
+        Upload an extra background image for this page (e.g. satellite view).
+        First upload sets image_alt; further uploads create PlanPageOverlay entries (multiple images per page).
+        Accepts: image (jpg/png/jpeg etc) or PDF (first page converted to PNG).
         Body: multipart form with key "file".
         """
         page = self.get_object()
@@ -185,36 +211,114 @@ class PlanPageViewSet(viewsets.ReadOnlyModelViewSet):
         is_pdf = name_lower.endswith(".pdf") or (getattr(file, "content_type", "") or "").lower() == "application/pdf"
 
         try:
-            if is_pdf:
-                # Convert first page of PDF to PNG (same zoom as plan set pages for consistent scale)
-                raw = file.read()
-                doc = fitz.open(stream=raw, filetype="pdf")
-                if len(doc) == 0:
-                    doc.close()
-                    return Response({"detail": "PDF has no pages."}, status=status.HTTP_400_BAD_REQUEST)
-                first_page = doc.load_page(0)
-                zoom_x, zoom_y = 2.0, 2.0
-                pix = first_page.get_pixmap(matrix=fitz.Matrix(zoom_x, zoom_y))
-                doc.close()
-                # Save to temp file then to image_alt (same API as plan set page generation)
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    pix.save(tmp.name)
-                    with open(tmp.name, "rb") as f:
-                        page.image_alt.save(
-                            f"page_{page.id}_alt.png",
-                            ContentFile(f.read()),
-                            save=True,
-                        )
-                Path(tmp.name).unlink(missing_ok=True)
+            content_or_file, save_name = self._save_uploaded_alt_image(page, file, is_pdf)
+            def next_auto_name():
+                existing = []
+                if page.image_alt_name:
+                    existing.append(page.image_alt_name.strip().lower())
+                for o in page.overlays.all():
+                    if o.name:
+                        existing.append(o.name.strip().lower())
+                i = 1
+                while f"image {i}".lower() in existing:
+                    i += 1
+                return f"Image {i}"
+
+            if not page.image_alt:
+                # First extra image: set image_alt
+                page.image_alt.save(save_name, content_or_file, save=True)
+                if not page.image_alt_name:
+                    page.image_alt_name = next_auto_name()
+                    page.save(update_fields=["image_alt_name"])
             else:
-                # Accept image (jpg, png, jpeg, etc.)
-                save_name = file.name or f"page_{page.id}_alt.png"
-                if not save_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-                    save_name = f"page_{page.id}_alt.png"
-                page.image_alt.save(save_name, file, save=True)
+                # Already have image_alt; add as overlay (multiple images)
+                max_order = (
+                    page.overlays.aggregate(Max("order"))["order__max"]
+                    or -1
+                )
+                overlay = PlanPageOverlay(plan_page=page, order=max_order + 1, name=next_auto_name())
+                overlay.save()
+                overlay.image.save(save_name, content_or_file, save=True)
+            page.refresh_from_db()
             return Response(PlanPageSerializer(page).data)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["patch"], url_path=r"extra-images/(?P<extra_id>[^/.]+)/rename")
+    def rename_extra_image(self, request, pk=None, extra_id=None):
+        page = self.get_object()
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"detail": "name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        # Enforce uniqueness per page (case-insensitive)
+        existing = []
+        if page.image_alt and page.image_alt_name:
+            existing.append(page.image_alt_name.strip().lower())
+        for o in page.overlays.all():
+            if o.name:
+                existing.append(o.name.strip().lower())
+        target_lower = name.lower()
+        # remove current name from existing before checking
+        if extra_id == "alt" and page.image_alt_name:
+            try:
+                existing.remove(page.image_alt_name.strip().lower())
+            except ValueError:
+                pass
+        if extra_id not in (None, "alt"):
+            try:
+                o = page.overlays.get(id=int(extra_id))
+                if o.name:
+                    try:
+                        existing.remove(o.name.strip().lower())
+                    except ValueError:
+                        pass
+            except Exception:
+                pass
+        if target_lower in existing:
+            return Response({"detail": "Name already exists on this sheet."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if extra_id == "alt":
+            if not page.image_alt:
+                return Response({"detail": "No alt image on this page."}, status=status.HTTP_400_BAD_REQUEST)
+            page.image_alt_name = name
+            page.save(update_fields=["image_alt_name"])
+        else:
+            try:
+                overlay = page.overlays.get(id=int(extra_id))
+            except Exception:
+                return Response({"detail": "Overlay not found."}, status=status.HTTP_404_NOT_FOUND)
+            overlay.name = name
+            overlay.save(update_fields=["name"])
+        page.refresh_from_db()
+        return Response(PlanPageSerializer(page).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["delete"], url_path=r"extra-images/(?P<extra_id>[^/.]+)")
+    def delete_extra_image(self, request, pk=None, extra_id=None):
+        page = self.get_object()
+        if extra_id == "alt":
+            if not page.image_alt:
+                return Response({"detail": "No alt image on this page."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                page.image_alt.delete(save=False)
+            except Exception:
+                pass
+            page.image_alt = None
+            page.image_alt_name = ""
+            page.save(update_fields=["image_alt", "image_alt_name"])
+        else:
+            try:
+                overlay = page.overlays.get(id=int(extra_id))
+            except Exception:
+                return Response({"detail": "Overlay not found."}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                overlay.image.delete(save=False)
+            except Exception:
+                pass
+            overlay.delete()
+        page.refresh_from_db()
+        return Response(PlanPageSerializer(page).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def add_to_dataset(self, request, pk=None):
@@ -261,6 +365,32 @@ class CountDefinitionViewSet(viewsets.ModelViewSet):
         if plan_set:
             qs = qs.filter(plan_set_id=plan_set)
         return qs
+
+    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def upload_shape_image(self, request):
+        """
+        Upload an icon image for an EACH count definition.
+        Accepts multipart form-data with key "file" (JPEG/PNG/etc).
+        Returns: {"url": "<relative media path>"} which should be stored in shape_image_url.
+        """
+        file = request.FILES.get("file") or request.FILES.get("image")
+        if not file:
+            return Response(
+                {"detail": "No file provided. Use form key 'file'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        original_name = file.name or "shape.png"
+        base_name = original_name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if "." not in base_name:
+            base_name = f"{base_name}.png"
+        name_lower = base_name.lower()
+        if not name_lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            base_name = f"{base_name}.png"
+
+        path = default_storage.save(f"count_shapes/{base_name}", file)
+        # Return relative media path; frontend will prefix with MEDIA_BASE if needed.
+        return Response({"url": path}, status=status.HTTP_201_CREATED)
 
 
 class CountItemViewSet(viewsets.ModelViewSet):

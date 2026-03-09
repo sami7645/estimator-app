@@ -65,3 +65,18 @@
   background: #dbeafe;
   border-color: #3b82f6;
 }
+
+.image-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.image-upload-label {
+  font-size: 0.8rem;
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

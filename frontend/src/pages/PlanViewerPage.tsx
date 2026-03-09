@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { PlanSet, PlanPage, CountDefinition, CountItem, AutoDetectResult } from '../api'
-import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, MEDIA_BASE } from '../api'
+import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, renamePlanPageExtraImage, deletePlanPageExtraImage, MEDIA_BASE } from '../api'
 import { exportPlanAsPdf } from '../utils/exportPlanPdf'
 import CountsPanel from '../components/CountsPanel'
 import ViewerCanvas from '../components/ViewerCanvas'
@@ -116,8 +116,11 @@ export default function PlanViewerPage() {
   const [noteEditorDragPosition, setNoteEditorDragPosition] = useState<{ x: number; y: number } | null>(null)
   /** Which background image to show: plan (primary) or satellite (secondary, same scale). */
   const [backgroundView, setBackgroundView] = useState<'plan' | 'satellite'>('plan')
+  /** When satellite view: which extra image is shown ('alt' = image_alt, number = overlay id). */
+  const [activeExtraImageId, setActiveExtraImageId] = useState<'alt' | number | null>(null)
   const [uploadAltLoading, setUploadAltLoading] = useState(false)
   const uploadAltInputRef = useRef<HTMLInputElement>(null)
+  const selectedPageIdRef = useRef<number | null>(null)
   const noteEditorDragRef = useRef<{
     startClientX: number
     startClientY: number
@@ -344,10 +347,16 @@ export default function PlanViewerPage() {
   }, [planSetId])
 
   useEffect(() => {
+    if (selectedPage?.id != null) selectedPageIdRef.current = selectedPage.id
+  }, [selectedPage?.id])
+
+  useEffect(() => {
     if (planSet) {
       loadCountDefinitions()
       if (planSet.pages && planSet.pages.length > 0) {
+        const preserveId = selectedPageIdRef.current
         const initial =
+          (preserveId && planSet.pages.find((p) => p.id === preserveId)) ||
           (initialPageId && planSet.pages.find((p) => p.id === initialPageId)) ||
           planSet.pages[0]
         setSelectedPage(initial)
@@ -375,10 +384,65 @@ export default function PlanViewerPage() {
     }
   }, [selectedPage])
 
-  // When switching page, use plan view if this page has no alternate image
+  // When switching page, use plan view if this page has no extra images; clear active extra if not valid for new page
   useEffect(() => {
-    if (selectedPage && !selectedPage.image_alt) setBackgroundView('plan')
-  }, [selectedPage?.id, selectedPage?.image_alt])
+    if (!selectedPage) return
+    const hasAlt = !!selectedPage.image_alt
+    const overlayIds = (selectedPage.overlays || []).map((o) => o.id)
+    const validExtra = activeExtraImageId === 'alt' ? hasAlt : (typeof activeExtraImageId === 'number' && overlayIds.includes(activeExtraImageId))
+    if (!hasAlt && overlayIds.length === 0) {
+      setBackgroundView('plan')
+      setActiveExtraImageId(null)
+    } else if (activeExtraImageId != null && !validExtra) {
+      setActiveExtraImageId(null)
+    }
+  }, [selectedPage?.id, selectedPage?.image_alt, selectedPage?.overlays, activeExtraImageId])
+
+  /** Current background image URL (plan or selected extra). */
+  const currentBackgroundImageUrl = selectedPage
+    ? (() => {
+        if (backgroundView !== 'satellite' || activeExtraImageId == null) {
+          const raw = selectedPage.image
+          return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
+        }
+        if (activeExtraImageId === 'alt' && selectedPage.image_alt) {
+          const raw = selectedPage.image_alt
+          return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
+        }
+        const overlay = (selectedPage.overlays || []).find((o) => o.id === activeExtraImageId)
+        if (overlay) {
+          const raw = overlay.image
+          return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
+        }
+        const raw = selectedPage.image
+        return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
+      })()
+    : null
+
+  /** List of extra images for the counts sidebar (image_alt + overlays). */
+  const pageExtraImages = selectedPage
+    ? (() => {
+        const list: { id: 'alt' | number; imageUrl: string; name: string }[] = []
+        if (selectedPage.image_alt) {
+          const raw = selectedPage.image_alt
+          list.push({
+            id: 'alt',
+            imageUrl: raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`,
+            name: selectedPage.image_alt_name?.trim() || 'Image 1',
+          })
+        }
+        ;(selectedPage.overlays || []).forEach((o) => {
+          const raw = o.image
+          list.push({
+            id: o.id,
+            imageUrl: raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`,
+            name: (o.name || '').trim() || '',
+          })
+        })
+        // Fill missing names with Image N based on ordering
+        return list.map((e, idx) => ({ ...e, name: e.name || `Image ${idx + 1}` }))
+      })()
+    : []
 
   /* ─── Undo / Redo ─── */
 
@@ -441,6 +505,7 @@ export default function PlanViewerPage() {
   async function handleUploadAlt(file: File) {
     if (!selectedPage) return
     const pageId = selectedPage.id
+    const hadAlt = !!selectedPage.image_alt
     setUploadAltLoading(true)
     try {
       const updated = await uploadPlanPageAlt(pageId, file)
@@ -448,6 +513,11 @@ export default function PlanViewerPage() {
       const nextPage = data?.pages?.find((p) => p.id === pageId) ?? updated
       setSelectedPage(nextPage)
       setBackgroundView('satellite')
+      if (!hadAlt && nextPage.image_alt) {
+        setActiveExtraImageId('alt')
+      } else if (nextPage.overlays?.length) {
+        setActiveExtraImageId(nextPage.overlays[nextPage.overlays.length - 1].id)
+      }
     } catch (err) {
       console.error('Upload alternate image failed:', err)
       alert(err instanceof Error ? err.message : 'Upload failed')
@@ -1640,9 +1710,12 @@ export default function PlanViewerPage() {
               eraseMode={eraseMode}
               onSetEraseMode={setEraseMode}
               hasPage={!!selectedPage}
-              hasAltImage={!!selectedPage?.image_alt}
+              hasAltImage={pageExtraImages.length > 0}
               backgroundView={backgroundView}
-              onBackgroundViewChange={setBackgroundView}
+              onBackgroundViewChange={(view) => {
+                setBackgroundView(view)
+                if (view === 'plan') setActiveExtraImageId(null)
+              }}
               onUploadAltClick={() => uploadAltInputRef.current?.click()}
               uploadAltLoading={uploadAltLoading}
             />
@@ -1687,13 +1760,7 @@ export default function PlanViewerPage() {
                       }}
                     >
                       <img
-                        src={
-                          (() => {
-                            const useAlt = backgroundView === 'satellite' && selectedPage.image_alt
-                            const raw = useAlt ? selectedPage.image_alt! : selectedPage.image
-                            return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
-                          })()
-                        }
+                        src={currentBackgroundImageUrl ?? ''}
                         alt={backgroundView === 'satellite' ? `Page ${selectedPage.page_number} (alternate)` : `Page ${selectedPage.page_number}`}
                         onLoad={handleImageLoad}
                         className="viewer-image"
@@ -1997,9 +2064,31 @@ export default function PlanViewerPage() {
             onCalibrationSaved={handleCalibrationSaved}
             selectedCountIds={selectedCountIds}
             onSelectedCountIdsChange={setSelectedCountIds}
-            hasAltImage={!!selectedPage?.image_alt}
-            backgroundView={backgroundView}
-            onBackgroundViewChange={setBackgroundView}
+            pageExtraImages={pageExtraImages}
+            activeExtraImageId={activeExtraImageId}
+            onActiveExtraImageChange={(id) => {
+              setActiveExtraImageId(id)
+              setBackgroundView(id != null ? 'satellite' : 'plan')
+            }}
+            onRenameExtraImage={async (id, name) => {
+              if (!selectedPage) return
+              await renamePlanPageExtraImage(selectedPage.id, id, name)
+              const data = await loadPlanSet()
+              const nextPage = data?.pages?.find((p) => p.id === selectedPage.id)
+              if (nextPage) setSelectedPage(nextPage)
+            }}
+            onDeleteExtraImage={async (id) => {
+              if (!selectedPage) return
+              // If deleting currently active background, switch back to plan
+              if (activeExtraImageId === id) {
+                setActiveExtraImageId(null)
+                setBackgroundView('plan')
+              }
+              await deletePlanPageExtraImage(selectedPage.id, id)
+              const data = await loadPlanSet()
+              const nextPage = data?.pages?.find((p) => p.id === selectedPage.id)
+              if (nextPage) setSelectedPage(nextPage)
+            }}
             onUploadAltClick={() => uploadAltInputRef.current?.click()}
             uploadAltLoading={uploadAltLoading}
             onDetectionsReceived={async (result: AutoDetectResult) => {

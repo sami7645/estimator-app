@@ -5,6 +5,7 @@ from .models import (
     Project,
     PlanSet,
     PlanPage,
+    PlanPageOverlay,
     CountDefinition,
     CountItem,
     ScaleCalibration,
@@ -52,10 +53,22 @@ class ProjectSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "owner", "created_at", "updated_at")
 
 
+class PlanPageOverlaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PlanPageOverlay
+        fields = ("id", "image", "order", "name")
+        read_only_fields = ("id",)
+
+
 class PlanPageSerializer(serializers.ModelSerializer):
+    overlays = PlanPageOverlaySerializer(many=True, read_only=True)
+
     class Meta:
         model = PlanPage
-        fields = "__all__"
+        fields = [
+            "id", "page_number", "title", "image", "image_alt", "image_alt_name", "dpi_x", "dpi_y",
+            "plan_set", "created_at", "updated_at", "overlays",
+        ]
         read_only_fields = ("id", "created_at", "updated_at")
 
 
@@ -69,6 +82,9 @@ class PlanSetSerializer(serializers.ModelSerializer):
 
 
 class CountDefinitionSerializer(serializers.ModelSerializer):
+    # Allow any string (including relative /media/ paths) for shape_image_url.
+    shape_image_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = CountDefinition
         fields = "__all__"

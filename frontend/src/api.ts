@@ -89,13 +89,23 @@ export async function fetchMyProjects(token: string): Promise<Project[]> {
   return res.json()
 }
 
+export type PlanPageOverlay = {
+  id: number
+  image: string
+  order: number
+  name?: string
+}
+
 export type PlanPage = {
   id: number
   page_number: number
   title: string
   image: string
-  /** Second background (e.g. satellite view); same scale as image. */
+  /** First extra background (e.g. satellite view); same scale as image. */
   image_alt?: string | null
+  image_alt_name?: string
+  /** Additional overlay images (multiple per page). */
+  overlays?: PlanPageOverlay[]
   plan_set: number
   dpi_x?: number | null
   dpi_y?: number | null
@@ -342,6 +352,46 @@ export async function uploadPlanPageAlt(pageId: number, file: File): Promise<Pla
     throw new Error(err.detail || 'Failed to upload alternate image')
   }
   return res.json()
+}
+
+export async function renamePlanPageExtraImage(pageId: number, extraId: 'alt' | number, name: string): Promise<PlanPage> {
+  const res = await fetch(`${API_BASE}/pages/${pageId}/extra-images/${extraId}/rename/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Failed to rename image')
+  }
+  return res.json()
+}
+
+export async function deletePlanPageExtraImage(pageId: number, extraId: 'alt' | number): Promise<PlanPage> {
+  const res = await fetch(`${API_BASE}/pages/${pageId}/extra-images/${extraId}/`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Failed to delete image')
+  }
+  return res.json()
+}
+
+/** Upload icon image for an EACH count definition; returns relative media URL to store in shape_image_url. */
+export async function uploadCountShapeImage(file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API_BASE}/count-definitions/upload_shape_image/`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Failed to upload count icon image')
+  }
+  const data = await res.json()
+  return (data.url || data.path || '') as string
 }
 
 export async function fetchCountDefinitions(planSetId: number): Promise<CountDefinition[]> {

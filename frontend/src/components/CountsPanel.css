@@ -162,6 +162,63 @@
   color: #3b82f6;
 }
 
+/* Squared low-quality thumbnail for image count (same size as color dot) */
+.count-image-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  flex-shrink: 0;
+  display: inline-block;
+  overflow: hidden;
+  background: #e5e7eb;
+}
+
+.count-image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.count-image-placeholder {
+  /* reuse count-color-dot size; already defined above */
+}
+
+.image-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.image-row-action-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.image-row-action-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.image-row-action-btn.danger {
+  color: #dc2626;
+}
+
+.image-row-action-btn.danger:hover {
+  background: rgba(220, 38, 38, 0.12);
+}
+
 .counts-list {
   flex: 0 0 auto;
 }

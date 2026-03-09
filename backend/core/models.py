@@ -90,6 +90,7 @@ class PlanPage(TimeStampedModel):
     title = models.CharField(max_length=255, blank=True)
     image = models.ImageField(upload_to="plans/pages/")
     image_alt = models.ImageField(upload_to="plans/pages_alt/", blank=True, null=True)  # e.g. satellite view, same scale
+    image_alt_name = models.CharField(max_length=255, blank=True, default="")
     # Stored rendering resolution (dots per inch) for this page image.
     # We render PDF pages using PyMuPDF at a fixed zoom, so knowing the
     # effective DPI lets the frontend derive a pixel-to-feet scale directly
@@ -104,6 +105,20 @@ class PlanPage(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.plan_set} - Page {self.page_number}"
+
+
+class PlanPageOverlay(TimeStampedModel):
+    """Extra background image for a plan page (e.g. satellite, alternate plan). One page can have many."""
+    plan_page = models.ForeignKey(PlanPage, on_delete=models.CASCADE, related_name="overlays")
+    image = models.ImageField(upload_to="plans/pages_overlays/")
+    order = models.PositiveIntegerField(default=0)
+    name = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self) -> str:
+        return f"Overlay {self.id} for page {self.plan_page_id}"
 
 
 class CountType(models.TextChoices):
