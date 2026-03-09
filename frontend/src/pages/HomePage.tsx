@@ -121,8 +121,8 @@ export default function HomePage() {
             className="hero-scroll"
             animate={{ y: [0, 6, 0] }}
             transition={{ repeat: Infinity, duration: 2 }}
-            onClick={() => scrollTo('how-it-works')}
-            onKeyDown={(e) => e.key === 'Enter' && scrollTo('how-it-works')}
+            onClick={() => scrollTo('pricing')}
+            onKeyDown={(e) => e.key === 'Enter' && scrollTo('pricing')}
             role="button"
             tabIndex={0}
             aria-label="Scroll down"
@@ -132,8 +132,137 @@ export default function HomePage() {
         </motion.div>
       </section>
 
+      {/* Pricing */}
+      <section id="pricing" className="section section-alt">
+        <div className="section-inner">
+          <motion.h2 className="section-title" {...fadeUp}>
+            Pricing
+          </motion.h2>
+          <motion.p className="section-lead" {...fadeUp}>
+            {isSubscribed ? 'You\'re on a premium plan.' : 'Simple plans. No hidden fees.'}
+          </motion.p>
+
+          {isSubscribed && (
+            <motion.div className="pricing-active-banner" {...fadeUp}>
+              <Shield size={20} />
+              <span>
+                You're currently on the <strong>{isActiveBusiness ? 'Business' : isActivePro ? 'Pro' : 'Starter'}</strong> plan.
+              </span>
+              <Link to="/subscribe" className="site-btn site-btn-primary pricing-manage-btn">
+                Manage Subscription
+              </Link>
+            </motion.div>
+          )}
+
+          <motion.div className="pricing-grid pricing-grid-4" variants={stagger} initial="initial" whileInView="whileInView" viewport={{ once: true }}>
+            {/* Demo */}
+            <motion.div className={`pricing-card ${(!isSubscribed || subscriptionPlan === 'free' || subscriptionPlan === null) ? 'pricing-card-current' : ''}`} variants={fadeUp}>
+              <h3>Demo</h3>
+              <div className="pricing-price">
+                <span className="pricing-amount">$0</span>
+                <span className="pricing-period">/month</span>
+              </div>
+              <p className="pricing-desc">Try the designer with sample projects. No credit card required.</p>
+              <ul className="pricing-features">
+                <li><Check size={18} /> Up to 3 projects</li>
+                <li><Check size={18} /> PDF upload & viewing</li>
+                <li><Check size={18} /> Count definitions & export</li>
+              </ul>
+              {isAuthenticated ? (
+                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
+                  {(!isSubscribed || subscriptionPlan === 'free' || subscriptionPlan === null) ? 'Current Plan' : 'Manage Plan'}
+                </Link>
+              ) : (
+                <Link to="/signup" className="site-btn site-btn-ghost pricing-btn">Get started free</Link>
+              )}
+            </motion.div>
+
+            {/* Starter */}
+            <motion.div className={`pricing-card ${subscriptionPlan === 'starter' && subscriptionStatus === 'active' ? 'pricing-card-current' : ''}`} variants={fadeUp}>
+              <h3>Starter</h3>
+              <div className="pricing-price">
+                <span className="pricing-amount">$75</span>
+                <span className="pricing-period">/month</span>
+              </div>
+              <p className="pricing-desc">For individuals who need full access and unlimited projects.</p>
+              <ul className="pricing-features">
+                <li><Check size={18} /> Unlimited projects</li>
+                <li><Check size={18} /> All Demo features</li>
+                <li><Check size={18} /> Priority support</li>
+                <li><Check size={18} /> 1 user</li>
+              </ul>
+              {isAuthenticated ? (
+                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
+                  Manage Plan
+                </Link>
+              ) : (
+                <Link to="/signup" className="site-btn site-btn-ghost pricing-btn">
+                  Choose Starter
+                </Link>
+              )}
+            </motion.div>
+
+            {/* Pro */}
+            <motion.div className={`pricing-card ${isActivePro ? 'pricing-card-current' : ''}`} variants={fadeUp}>
+              {isActivePro
+                ? <span className="pricing-badge pricing-badge-active">Your Plan</span>
+                : <span className="pricing-badge">Popular</span>
+              }
+              <h3>Pro</h3>
+              <div className="pricing-price">
+                <span className="pricing-amount">$150</span>
+                <span className="pricing-period">/month</span>
+              </div>
+              <p className="pricing-desc">For teams that need collaboration and ML auto-detection.</p>
+              <ul className="pricing-features">
+                <li><Check size={18} /> Everything in Starter</li>
+                <li><Check size={18} /> ML auto-detection</li>
+                <li><Check size={18} /> Team seats (5 users)</li>
+                <li><Check size={18} /> Advanced reporting</li>
+              </ul>
+              {isAuthenticated ? (
+                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
+                  Manage Plan
+                </Link>
+              ) : (
+                <Link to="/signup" className="site-btn site-btn-primary pricing-btn">
+                  Choose Pro <ArrowRight size={18} />
+                </Link>
+              )}
+            </motion.div>
+
+            {/* Business */}
+            <motion.div className={`pricing-card ${isActiveBusiness ? 'pricing-card-current' : ''}`} variants={fadeUp}>
+              {isActiveBusiness
+                ? <span className="pricing-badge pricing-badge-active">Your Plan</span>
+                : null
+              }
+              <h3>Business</h3>
+              <div className="pricing-price">
+                <span className="pricing-amount">$250</span>
+                <span className="pricing-period">/month</span>
+              </div>
+              <p className="pricing-desc">For larger teams that need more users and higher upload limits.</p>
+              <ul className="pricing-features">
+                <li><Check size={18} /> Everything in Pro</li>
+                <li><Check size={18} /> Team seats (50 users)</li>
+                <li><Check size={18} /> Higher upload limits</li>
+                <li><Check size={18} /> Advanced ML training</li>
+              </ul>
+              {isAuthenticated ? (
+                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
+                  Manage Plan
+                </Link>
+              ) : (
+                <Link to="/signup" className="site-btn site-btn-ghost pricing-btn">Get started</Link>
+              )}
+            </motion.div>
+          </motion.div>
+        </div>
+      </section>
+
       {/* How It Works */}
-      <section id="how-it-works" className="section section-alt">
+      <section id="how-it-works" className="section">
         <div className="section-inner">
           <motion.h2 className="section-title" {...fadeUp}>
             How It Works
@@ -186,7 +315,7 @@ export default function HomePage() {
             Built for the trades you work in.
           </motion.p>
           <motion.div className="trades-grid" variants={stagger} initial="initial" whileInView="whileInView" viewport={{ once: true }}>
-            {['Electrical', 'Plumbing', 'Mechanical', 'Acoustic', 'General'].map((trade, i) => (
+            {['Electrical', 'Plumbing', 'Mechanical', 'Acoustic', 'General', 'Traditional ADU', 'Remodel'].map((trade, i) => (
               <motion.div key={trade} className="trade-card" variants={fadeUp}>
                 <span className="trade-badge">{trade}</span>
                 <p>Define count types and colors per trade. Filter and export by trade.</p>
@@ -246,42 +375,18 @@ export default function HomePage() {
             </div>
           </motion.div>
 
-          {/* Testimonials / Happy people - larger photos */}
-          <motion.div className="testimonials" variants={stagger} initial="initial" whileInView="whileInView" viewport={{ once: true }}>
-            <h3 className="testimonials-title">Loved by estimators</h3>
-            <div className="testimonials-grid">
-              {[
-                {
-                  quote: 'Cut our takeoff time in half. The scale calibration alone is worth it.',
-                  name: 'Sarah M.',
-                  role: 'Senior Estimator',
-                  img: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400&h=400&fit=crop&crop=face',
-                },
-                {
-                  quote: 'Finally, a tool that exports directly to Excel. No more manual entry.',
-                  name: 'James K.',
-                  role: 'Electrical Contractor',
-                  img: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop&crop=face',
-                },
-                {
-                  quote: 'We use it on every project. Simple, fast, and reliable.',
-                  name: 'Maria L.',
-                  role: 'Project Manager',
-                  img: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop&crop=face',
-                },
-              ].map((t, i) => (
-                <motion.div key={i} className="testimonial-card" variants={fadeUp}>
-                  <p className="testimonial-quote">&ldquo;{t.quote}&rdquo;</p>
-                  <div className="testimonial-author">
-                    <img src={t.img} alt="" className="testimonial-avatar" width={80} height={80} />
-                    <div>
-                      <strong>{t.name}</strong>
-                      <span>{t.role}</span>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
+          {/* Google Reviews */}
+          <motion.div className="google-reviews-section" {...fadeUp}>
+            <h3 className="google-reviews-title">What our customers say</h3>
+            <p className="google-reviews-lead">See real reviews from estimators and contractors.</p>
+            <a
+              href="TODO_GOOGLE_REVIEW_LINK"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="site-btn site-btn-primary google-reviews-btn"
+            >
+              Read Our Google Reviews <ArrowRight size={18} />
+            </a>
           </motion.div>
         </div>
       </section>
@@ -311,106 +416,6 @@ export default function HomePage() {
               <h3>Support</h3>
               <p>Contact us for help or feature requests.</p>
             </motion.a>
-          </motion.div>
-        </div>
-      </section>
-
-      {/* Pricing */}
-      <section id="pricing" className="section section-alt">
-        <div className="section-inner">
-          <motion.h2 className="section-title" {...fadeUp}>
-            Pricing
-          </motion.h2>
-          <motion.p className="section-lead" {...fadeUp}>
-            {isSubscribed ? 'You\'re on a premium plan.' : 'Simple plans. No hidden fees.'}
-          </motion.p>
-
-          {isSubscribed && (
-            <motion.div className="pricing-active-banner" {...fadeUp}>
-              <Shield size={20} />
-              <span>
-                You're currently on the <strong>{isActiveBusiness ? 'Business' : isActivePro ? 'Pro' : 'Starter'}</strong> plan.
-              </span>
-              <Link to="/subscribe" className="site-btn site-btn-primary pricing-manage-btn">
-                Manage Subscription
-              </Link>
-            </motion.div>
-          )}
-
-          <motion.div className="pricing-grid" variants={stagger} initial="initial" whileInView="whileInView" viewport={{ once: true }}>
-            <motion.div className={`pricing-card ${(!isSubscribed || subscriptionPlan === 'free' || subscriptionPlan === null) ? 'pricing-card-current' : ''}`} variants={fadeUp}>
-              <h3>Starter</h3>
-              <div className="pricing-price">
-                <span className="pricing-amount">$0</span>
-                <span className="pricing-period">/month</span>
-              </div>
-              <p className="pricing-desc">Try the designer with sample projects. No credit card required.</p>
-              <ul className="pricing-features">
-                <li><Check size={18} /> Up to 3 projects</li>
-                <li><Check size={18} /> PDF upload & viewing</li>
-                <li><Check size={18} /> Count definitions & export</li>
-              </ul>
-              {isAuthenticated ? (
-                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
-                  {(!isSubscribed || subscriptionPlan === 'free' || subscriptionPlan === null) ? 'Current Plan' : 'Manage Plan'}
-                </Link>
-              ) : (
-                <Link to="/signup" className="site-btn site-btn-ghost pricing-btn">Get started</Link>
-              )}
-            </motion.div>
-            <motion.div className={`pricing-card ${isActivePro ? 'pricing-card-current' : ''}`} variants={fadeUp}>
-              {isActivePro
-                ? <span className="pricing-badge pricing-badge-active">Your Plan</span>
-                : <span className="pricing-badge">Popular</span>
-              }
-              <h3>Pro</h3>
-              <div className="pricing-price">
-                <span className="pricing-amount">$49</span>
-                <span className="pricing-period">/month</span>
-              </div>
-              <p className="pricing-desc">For teams that need unlimited projects and priority support.</p>
-              <ul className="pricing-features">
-                <li><Check size={18} /> Unlimited projects</li>
-                <li><Check size={18} /> All Starter features</li>
-                <li><Check size={18} /> Priority support</li>
-                <li><Check size={18} /> ML auto-detection</li>
-                <li><Check size={18} /> Team seats (3 users)</li>
-              </ul>
-              {isAuthenticated ? (
-                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
-                  Manage Plan
-                </Link>
-              ) : (
-                <Link to="/signup" className="site-btn site-btn-primary pricing-btn">
-                  Choose Pro <ArrowRight size={18} />
-                </Link>
-              )}
-            </motion.div>
-            <motion.div className={`pricing-card ${isActiveBusiness ? 'pricing-card-current' : ''}`} variants={fadeUp}>
-              {isActiveBusiness
-                ? <span className="pricing-badge pricing-badge-active">Your Plan</span>
-                : null
-              }
-              <h3>Business</h3>
-              <div className="pricing-price">
-                <span className="pricing-amount">$149</span>
-                <span className="pricing-period">/month</span>
-              </div>
-              <p className="pricing-desc">For larger teams that need more users and higher upload limits.</p>
-              <ul className="pricing-features">
-                <li><Check size={18} /> Everything in Pro</li>
-                <li><Check size={18} /> Team seats (50 users)</li>
-                <li><Check size={18} /> Higher upload limits</li>
-                <li><Check size={18} /> Advanced ML training</li>
-              </ul>
-              {isAuthenticated ? (
-                <Link to="/subscribe" className="site-btn site-btn-ghost pricing-btn">
-                  Manage Plan
-                </Link>
-              ) : (
-                <Link to="/signup" className="site-btn site-btn-ghost pricing-btn">Get started</Link>
-              )}
-            </motion.div>
           </motion.div>
         </div>
       </section>

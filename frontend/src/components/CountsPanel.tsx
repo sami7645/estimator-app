@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { Satellite } from 'lucide-react'
 import type { CountDefinition, CountItem, PlanPage, AutoDetectResult } from '../api'
 import { deleteCountDefinition, updateCountDefinition, runAutoDetect, fetchDatasetStats, type DatasetStats } from '../api'
 import { useAuth } from '../context/AuthContext'
@@ -38,6 +39,11 @@ interface CountsPanelProps {
   onDetectionsReceived?: (result: AutoDetectResult) => void
   selectedCountIds?: Set<number>
   onSelectedCountIdsChange?: (ids: Set<number>) => void
+  hasAltImage?: boolean
+  backgroundView?: 'plan' | 'satellite'
+  onBackgroundViewChange?: (view: 'plan' | 'satellite') => void
+  onUploadAltClick?: () => void
+  uploadAltLoading?: boolean
 }
 
 export default function CountsPanel({
@@ -64,6 +70,11 @@ export default function CountsPanel({
   onDetectionsReceived,
   selectedCountIds,
   onSelectedCountIdsChange,
+  hasAltImage = false,
+  backgroundView = 'plan',
+  onBackgroundViewChange,
+  onUploadAltClick,
+  uploadAltLoading = false,
 }: CountsPanelProps) {
   const { token } = useAuth()
   const [showModal, setShowModal] = useState(false)
@@ -213,6 +224,7 @@ export default function CountsPanel({
   return (
     <aside className="counts-panel">
       <div className="counts-panel-body">
+
       {/* ── Counts Section ── */}
       <div className="section-wrapper">
         <div className="section-header" onClick={() => setIsCountsExpanded(!isCountsExpanded)}>
@@ -263,6 +275,35 @@ export default function CountsPanel({
         {isCountsExpanded && (
           <div className="section-body">
       <div className="counts-list">
+        {/* Single image-view row: only when user has uploaded an alternate/satellite image. Eye off = plan, eye on = satellite. */}
+        {selectedPage && hasAltImage && onBackgroundViewChange && (
+          <div
+            className={`count-row image-count-row ${backgroundView === 'satellite' ? 'active' : ''}`}
+            onClick={() => onBackgroundViewChange(backgroundView === 'satellite' ? 'plan' : 'satellite')}
+          >
+            <div className="count-row-header">
+              <span className="expand-btn expand-btn-placeholder" aria-hidden />
+              <button
+                className={`eye-btn ${backgroundView === 'satellite' ? '' : 'off'}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onBackgroundViewChange(backgroundView === 'satellite' ? 'plan' : 'satellite')
+                }}
+                title={backgroundView === 'satellite' ? 'Showing satellite view (click to show plan)' : 'Showing plan view (click to show satellite)'}
+              >
+                {backgroundView === 'satellite' ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                )}
+              </button>
+              <div className="count-info">
+                <Satellite size={14} className="image-count-icon" />
+                <span className="count-name">Satellite Image</span>
+              </div>
+            </div>
+          </div>
+        )}
         {countDefinitions.map((countDef, idx) => {
           const isExpanded = expandedIds.has(countDef.id)
           const isHidden = hiddenCountIds.has(countDef.id)

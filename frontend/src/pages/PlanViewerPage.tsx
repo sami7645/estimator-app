@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { flushSync } from 'react-dom'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle, Map as MapIcon, Satellite } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { PlanSet, PlanPage, CountDefinition, CountItem, AutoDetectResult } from '../api'
 import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, MEDIA_BASE } from '../api'
 import { exportPlanAsPdf } from '../utils/exportPlanPdf'
@@ -1961,28 +1961,6 @@ export default function PlanViewerPage() {
               </div>
             )
           })()}
-          {selectedPage?.image_alt && (
-            <div className="viewer-map-type-switch" role="group" aria-label="Map type">
-              <button
-                type="button"
-                className={`viewer-map-type-btn ${backgroundView === 'plan' ? 'active' : ''}`}
-                onClick={() => setBackgroundView('plan')}
-                title="Plan view"
-                aria-label="Plan view"
-              >
-                <MapIcon size={18} strokeWidth={2} />
-              </button>
-              <button
-                type="button"
-                className={`viewer-map-type-btn ${backgroundView === 'satellite' ? 'active' : ''}`}
-                onClick={() => setBackgroundView('satellite')}
-                title="Satellite / alternate view"
-                aria-label="Satellite view"
-              >
-                <Satellite size={18} strokeWidth={2} />
-              </button>
-            </div>
-          )}
           </div>
         </div>
 
@@ -2019,6 +1997,11 @@ export default function PlanViewerPage() {
             onCalibrationSaved={handleCalibrationSaved}
             selectedCountIds={selectedCountIds}
             onSelectedCountIdsChange={setSelectedCountIds}
+            hasAltImage={!!selectedPage?.image_alt}
+            backgroundView={backgroundView}
+            onBackgroundViewChange={setBackgroundView}
+            onUploadAltClick={() => uploadAltInputRef.current?.click()}
+            uploadAltLoading={uploadAltLoading}
             onDetectionsReceived={async (result: AutoDetectResult) => {
               // Refetch definitions and items from the server so the UI shows
               // exactly what was saved (same as after refresh). This fixes

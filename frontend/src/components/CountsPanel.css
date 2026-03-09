@@ -140,6 +140,28 @@
   flex-direction: column;
 }
 
+/* ── Image count row (single row in counts list when alternate image uploaded) ── */
+.image-count-row {
+  cursor: pointer;
+}
+
+.image-count-row .expand-btn-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.image-count-icon {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.image-count-row.active .image-count-icon {
+  color: #3b82f6;
+}
+
 .counts-list {
   flex: 0 0 auto;
 }

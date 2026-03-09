@@ -19,11 +19,11 @@ import { fetchPlanSet } from '../api'
 import './SiteLayout.css'
 
 const NAV_LINKS = [
+  { sectionId: 'pricing', label: 'Pricing' },
   { sectionId: 'how-it-works', label: 'How It Works' },
   { sectionId: 'trades', label: 'Trades' },
   { sectionId: 'why', label: 'Why Us?' },
   { sectionId: 'resources', label: 'Resources' },
-  { sectionId: 'pricing', label: 'Pricing' },
   { sectionId: 'contact', label: 'Contact' },
 ]
 
