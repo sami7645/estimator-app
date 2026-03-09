@@ -1193,12 +1193,12 @@ export default function ViewerCanvas({
     if (pos) setCursorPos(pos)
   }
 
-  async function handleVertexDragEnd(itemId: number, vIdx: number, newPos: { x: number; y: number }) {
+  function handleVertexDragEnd(itemId: number, vIdx: number, newPos: { x: number; y: number }) {
     setIsDragging(false)
-    const item = countItems.find((i) => i.id === itemId)
+    const item = countItemsRef.current.find((i) => i.id === itemId)
     if (!item) return
     const [nx, ny] = norm(newPos.x, newPos.y)
-    const g = [...item.geometry]
+    const g = item.geometry.map(c => [...c])
     g[vIdx] = [nx, ny]
     if (item.geometry_type === 'polygon') {
       if (vIdx === 0 && g.length > 1) g[g.length - 1] = [nx, ny]
@@ -1218,8 +1218,10 @@ export default function ViewerCanvas({
         updates.perimeter_ft = null
       }
     }
-    try { const u = await trackedUpdate(itemId, updates); onCountItemUpdated(u) }
-    catch (err) { console.error('Vertex drag failed:', err) }
+    // Optimistic local update first, then persist to server
+    const optimistic: CountItem = { ...item, ...updates }
+    onCountItemUpdated(optimistic)
+    trackedUpdate(itemId, updates).catch((err) => console.error('Vertex drag failed:', err))
   }
 
   const dragGuardActive = () => {
@@ -1445,16 +1447,40 @@ export default function ViewerCanvas({
     })()
     if (draggedIsLineOrPoly) forceGroupZeroIdRef.current = itemId
     if (idsToMove.size === 1) {
-      try {
-        await offsetItemGeometry(itemId, dx, dy)
-        markMovedAndClearBases()
-        clearOffsetNextFrame()
-      } catch (err) {
-        console.error('Failed to save item position:', err)
-        singleDragStartPosRef.current = null
-        forceGroupZeroIdRef.current = null
-        setMultiDragOffset(null)
+      // Reset Konva node to origin BEFORE updating geometry so there's no flash
+      try { node.position({ x: 0, y: 0 }) } catch (_) {}
+
+      // Optimistically update geometry in local state immediately (no waiting for server)
+      const item = countItemsRef.current.find((i) => i.id === itemId)
+      if (item) {
+        const movedGeom = item.geometry.map(([nx, ny]) => {
+          const [x, y] = denorm(nx, ny)
+          return norm(x + dx, y + dy)
+        })
+        if (item.geometry_type === 'polygon' && movedGeom.length >= 2) {
+          movedGeom[movedGeom.length - 1] = [...movedGeom[0]]
+        }
+        const optimistic: CountItem = {
+          ...item,
+          geometry: movedGeom.map(c => [...c]),
+          ...(isCalibrated && item.geometry_type === 'polyline' ? { length_ft: calcLength(movedGeom) } : {}),
+          ...(isCalibrated && item.geometry_type === 'polygon' ? { area_sqft: calcArea(movedGeom), perimeter_ft: calcPerimeter(movedGeom) } : {}),
+        }
+        onCountItemUpdated(optimistic)
+
+        // Persist to server in background (fire-and-forget with error handling)
+        const updates: Partial<CountItem> = { geometry: movedGeom }
+        if (isCalibrated) {
+          if (item.geometry_type === 'polyline') updates.length_ft = calcLength(movedGeom)
+          else if (item.geometry_type === 'polygon') {
+            updates.area_sqft = calcArea(movedGeom)
+            updates.perimeter_ft = calcPerimeter(movedGeom)
+          }
+        }
+        trackedUpdate(itemId, updates).catch((err) => console.error('Failed to persist drag:', err))
       }
+      markMovedAndClearBases()
+      clearOffsetNextFrame()
     } else {
       try {
         const batchUpdates: { id: number; item: CountItem }[] = []
@@ -1513,6 +1539,7 @@ export default function ViewerCanvas({
     fg = '#ffffff',
     fontSize = S.font,
     offsetY = 0,
+    stableKey?: string,
   ) {
     // Use sz() so labels stay a consistent size on screen,
     // even when you zoom the plan way in or out.
@@ -1530,7 +1557,7 @@ export default function ViewerCanvas({
         y={cy + dy}
         rotation={-rotation}
         listening={false}
-        key={`tag-${text}-${cx.toFixed(0)}-${cy.toFixed(0)}`}
+        key={stableKey ?? `tag-${text}-${cx.toFixed(0)}-${cy.toFixed(0)}`}
       >
         <Rect
           x={-bw / 2}
@@ -1943,8 +1970,9 @@ export default function ViewerCanvas({
               fill={hov ? 'rgba(0,0,0,0.7)' : sel ? '#fff' : 'rgba(255,255,255,0.8)'}
               stroke={def.color} strokeWidth={vs}
               draggable
-              onDragStart={() => { setIsDragging(true) }}
-              onDragEnd={(e) => handleVertexDragEnd(item.id, idx, { x: e.target.x(), y: e.target.y() })}
+              onMouseDown={(e) => { e.cancelBubble = true }}
+              onDragStart={(e) => { e.cancelBubble = true; setIsDragging(true) }}
+              onDragEnd={(e) => { e.cancelBubble = true; handleVertexDragEnd(item.id, idx, { x: e.target.x(), y: e.target.y() }) }}
               onClick={(e) => {
                 e.cancelBubble = true
                 const next = new Set([item.id])
@@ -1985,12 +2013,11 @@ export default function ViewerCanvas({
     const areaVal = item.area_sqft ?? calcArea(item.geometry)
     const perimVal = item.perimeter_ft ?? calcPerimeter(item.geometry)
     const [cx, cy] = centroid(item.geometry)
-    const areaLabel = isCalibrated ? formatSqft(areaVal) : '—'
-    const perimLabel = isCalibrated ? formatFt(perimVal) : '—'
-
     const isCirclePolygon = uniqueVerts.length >= 16
     const labelCx = cx + ox
     const labelCy = cy + oy
+    // Single centered label like polyline's "Total:" — same style (dark pill, white text)
+    const polygonLabel = isCalibrated ? `${formatSqft(areaVal)}  ·  ${formatFt(perimVal)}` : '—'
     const forceZero = forceGroupZeroIdRef.current === item.id
 
     return (
@@ -2005,8 +2032,8 @@ export default function ViewerCanvas({
         onDragMove={handleItemDragMove}
         onDragEnd={(e) => handleItemDragEnd(item.id, e)}
       >
-        {/* Filled polygon */}
-        <Line points={pts} closed
+        {/* Filled polygon — stable key so drag doesn't leave trace artifacts */}
+        <Line key={`poly-${item.id}`} points={pts} closed
           fill={def.color + (isSel ? '50' : '30')}
           stroke={isSel ? SEL_COLOR : def.color} strokeWidth={pw}
           lineCap="round" lineJoin="round"
@@ -2024,9 +2051,8 @@ export default function ViewerCanvas({
           </React.Fragment>
         })}
 
-        {/* Area & perimeter labels at centroid */}
-        {renderTag(areaLabel, labelCx, labelCy, 'transparent', '#111827', S.fontSm)}
-        {renderTag(perimLabel, labelCx, labelCy, 'transparent', '#111827', S.fontSm, 20)}
+        {/* Single centered label at centroid — same style as polyline "Total:" (dark pill, white text) */}
+        {renderTag(polygonLabel, labelCx, labelCy, 'rgba(0,0,0,0.72)', '#ffffff', S.font, 0, `polygon-${item.id}`)}
 
         {/* Vertex handles — hidden for circle polygons (smooth circle) */}
         {!isCirclePolygon && uniqueVerts.map(([nx, ny], idx) => {
@@ -2039,8 +2065,9 @@ export default function ViewerCanvas({
               fill={hov ? 'rgba(0,0,0,0.7)' : sel ? '#fff' : 'rgba(255,255,255,0.8)'}
               stroke={def.color} strokeWidth={vs}
               draggable
-              onDragStart={() => { setIsDragging(true) }}
-              onDragEnd={(e) => handleVertexDragEnd(item.id, idx, { x: e.target.x(), y: e.target.y() })}
+              onMouseDown={(e) => { e.cancelBubble = true }}
+              onDragStart={(e) => { e.cancelBubble = true; setIsDragging(true) }}
+              onDragEnd={(e) => { e.cancelBubble = true; handleVertexDragEnd(item.id, idx, { x: e.target.x(), y: e.target.y() }) }}
               onClick={(e) => {
                 e.cancelBubble = true
                 const next = new Set([item.id])
