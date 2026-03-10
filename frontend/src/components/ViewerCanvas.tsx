@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react'
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { flushSync } from 'react-dom'
-import { Stage, Layer, Line, Circle, Ellipse, Rect, RegularPolygon, Group, Text, Image } from 'react-konva'
+import { Stage, Layer, Line, Circle, Ellipse, Rect, RegularPolygon, Group, Text, Image, Transformer } from 'react-konva'
 import type { CountItem, CountDefinition } from '../api'
 import { createCountItem, deleteCountItem, updateCountItem, MEDIA_BASE } from '../api'
 import './ViewerCanvas.css'
@@ -49,6 +49,14 @@ interface ViewerCanvasProps {
   onSaveEnd?: () => void
   onSaveError?: () => void
   eraseMode?: boolean
+  overlayImage?: {
+    url: string
+    scale: number
+    offset_x: number
+    offset_y: number
+  } | null
+  overlayEditing?: boolean
+  onOverlayTransformChange?: (transform: { scale: number; offset_x: number; offset_y: number }) => void
 }
 
 type DrawingState =
@@ -73,11 +81,11 @@ const SEL_COLOR = '#2563eb' // Bright blue selection highlight (visible on any b
 
 const S = {
   marker:       25,    // marker size in screen px (through sz()) so it looks the same on all resolutions
-  vert:         6,      // vertex handle radius
-  vertHover:    9,      // vertex handle radius on hover
+  vert:         4,      // vertex handle radius (screen px, via sz())
+  vertHover:    7,      // vertex handle radius on hover/selected
   lineW:        2,      // polyline stroke (matches drawing preview feel)
   polyW:        2,      // polygon stroke
-  hit:          18,     // invisible hit area
+  hit:          12,     // invisible hit area
   snap:         22,     // snap-to-close distance
   crossArm:     18,     // crosshair arm length
   crossGap:     5,      // crosshair center gap
@@ -154,6 +162,9 @@ export default function ViewerCanvas({
   onSaveEnd,
   onSaveError,
   eraseMode = false,
+  overlayImage,
+  overlayEditing = false,
+  onOverlayTransformChange,
 }: ViewerCanvasProps) {
 
   async function trackedCreate(data: Parameters<typeof createCountItem>[0]) {
@@ -2392,6 +2403,66 @@ export default function ViewerCanvas({
    * ═══════════════════════════════════════════════════════════ */
 
   /* ═══════════════════════════════════════════════════════════
+   *  OVERLAY IMAGE (background image overlay on canvas)
+   * ═══════════════════════════════════════════════════════════ */
+
+  const [overlayImgEl, setOverlayImgEl] = useState<HTMLImageElement | null>(null)
+  const overlayNodeRef = useRef<any>(null)
+  const overlayTrRef = useRef<any>(null)
+
+  useEffect(() => {
+    if (!overlayImage?.url) { setOverlayImgEl(null); return }
+    const img = new window.Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => setOverlayImgEl(img)
+    img.onerror = () => setOverlayImgEl(null)
+    img.src = overlayImage.url
+    return () => { img.onload = null; img.onerror = null }
+  }, [overlayImage?.url])
+
+  useEffect(() => {
+    if (overlayEditing && overlayTrRef.current && overlayNodeRef.current) {
+      overlayTrRef.current.nodes([overlayNodeRef.current])
+      overlayTrRef.current.getLayer()?.batchDraw()
+    }
+  }, [overlayEditing, overlayImgEl])
+
+  const overlayRenderW = overlayImgEl && overlayImage
+    ? width * overlayImage.scale
+    : 0
+  const overlayRenderH = overlayImgEl && overlayImage
+    ? overlayRenderW * (overlayImgEl.naturalHeight / overlayImgEl.naturalWidth)
+    : 0
+
+  const handleOverlayDragEnd = useCallback((e: any) => {
+    if (!onOverlayTransformChange || !overlayImage) return
+    const node = e.target
+    onOverlayTransformChange({
+      scale: overlayImage.scale,
+      offset_x: node.x() / width,
+      offset_y: node.y() / height,
+    })
+  }, [onOverlayTransformChange, overlayImage, width, height])
+
+  const handleOverlayTransformEnd = useCallback((e: any) => {
+    if (!onOverlayTransformChange) return
+    const node = overlayNodeRef.current
+    if (!node) return
+    const scaleXNode = node.scaleX()
+    const newW = node.width() * scaleXNode
+    const newScale = newW / width
+    node.scaleX(1)
+    node.scaleY(1)
+    node.width(newW)
+    node.height(node.height() * scaleXNode)
+    onOverlayTransformChange({
+      scale: newScale,
+      offset_x: node.x() / width,
+      offset_y: node.y() / height,
+    })
+  }, [onOverlayTransformChange, width, height])
+
+  /* ═══════════════════════════════════════════════════════════
    *  MAIN RENDER
    * ═══════════════════════════════════════════════════════════ */
 
@@ -2410,7 +2481,53 @@ export default function ViewerCanvas({
         onMouseUp={handleStageMouseUp}
         style={{ cursor: cursorStyle }}
       >
-        {/* Layer 1: interactive shapes — capture selection on mousedown so multi-drag has correct set */}
+        {/* Layer 1: overlay background image (below count shapes) */}
+        {overlayImgEl && overlayImage && (
+          <Layer listening={overlayEditing}>
+            <Image
+              ref={overlayNodeRef}
+              image={overlayImgEl}
+              x={(overlayImage.offset_x || 0) * width}
+              y={(overlayImage.offset_y || 0) * height}
+              width={overlayRenderW}
+              height={overlayRenderH}
+              opacity={overlayEditing ? 0.7 : 0.85}
+              draggable={overlayEditing}
+              onDragEnd={handleOverlayDragEnd}
+              onTransformEnd={handleOverlayTransformEnd}
+            />
+            {overlayEditing && (
+              <Transformer
+                ref={overlayTrRef}
+                keepRatio={true}
+                enabledAnchors={[
+                  'top-left',
+                  'top-right',
+                  'bottom-left',
+                  'bottom-right',
+                  'top-center',
+                  'bottom-center',
+                  'middle-left',
+                  'middle-right',
+                ]}
+                boundBoxFunc={(oldBox, newBox) => {
+                  if (newBox.width < 20 || newBox.height < 20) return oldBox
+                  return newBox
+                }}
+                rotateEnabled={false}
+                borderStroke="#2563eb"
+                borderStrokeWidth={sz(2)}
+                anchorFill="#ffffff"
+                anchorStroke="#2563eb"
+                anchorSize={sz(10)}
+                anchorCornerRadius={3}
+                padding={sz(14)}
+              />
+            )}
+          </Layer>
+        )}
+
+        {/* Layer 2: interactive shapes — capture selection on mousedown so multi-drag has correct set */}
         <Layer
           onMouseDown={() => {
             const refNow = selectedItemIdsRef.current
@@ -2441,7 +2558,7 @@ export default function ViewerCanvas({
           {renderDrawingInProgress()}
         </Layer>
 
-        {/* Layer 2: non-interactive overlays */}
+        {/* Layer 3: non-interactive overlays */}
         <Layer listening={false}>
           {renderScaleBar()}
           {renderCalibrationOverlay()}

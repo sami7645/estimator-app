@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { PlanSet, PlanPage, CountDefinition, CountItem, AutoDetectResult } from '../api'
-import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, renamePlanPageExtraImage, deletePlanPageExtraImage, MEDIA_BASE } from '../api'
+import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, renamePlanPageExtraImage, deletePlanPageExtraImage, updateExtraImageTransform, MEDIA_BASE } from '../api'
 import { exportPlanAsPdf } from '../utils/exportPlanPdf'
 import CountsPanel from '../components/CountsPanel'
 import ViewerCanvas from '../components/ViewerCanvas'
@@ -118,6 +118,7 @@ export default function PlanViewerPage() {
   const [backgroundView, setBackgroundView] = useState<'plan' | 'satellite'>('plan')
   /** When satellite view: which extra image is shown ('alt' = image_alt, number = overlay id). */
   const [activeExtraImageId, setActiveExtraImageId] = useState<'alt' | number | null>(null)
+  const [editingExtraImageId, setEditingExtraImageId] = useState<'alt' | number | null>(null)
   const [uploadAltLoading, setUploadAltLoading] = useState(false)
   const uploadAltInputRef = useRef<HTMLInputElement>(null)
   const selectedPageIdRef = useRef<number | null>(null)
@@ -393,31 +394,45 @@ export default function PlanViewerPage() {
     if (!hasAlt && overlayIds.length === 0) {
       setBackgroundView('plan')
       setActiveExtraImageId(null)
+      setEditingExtraImageId(null)
     } else if (activeExtraImageId != null && !validExtra) {
       setActiveExtraImageId(null)
+      setEditingExtraImageId(null)
     }
   }, [selectedPage?.id, selectedPage?.image_alt, selectedPage?.overlays, activeExtraImageId])
 
-  /** Current background image URL (plan or selected extra). */
+  /** Background always shows the plan image; overlay images render on the Konva canvas. */
   const currentBackgroundImageUrl = selectedPage
     ? (() => {
-        if (backgroundView !== 'satellite' || activeExtraImageId == null) {
-          const raw = selectedPage.image
-          return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
-        }
-        if (activeExtraImageId === 'alt' && selectedPage.image_alt) {
-          const raw = selectedPage.image_alt
-          return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
-        }
-        const overlay = (selectedPage.overlays || []).find((o) => o.id === activeExtraImageId)
-        if (overlay) {
-          const raw = overlay.image
-          return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
-        }
         const raw = selectedPage.image
         return raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`
       })()
     : null
+
+  /** Active overlay image data for the canvas (when an extra image is toggled on). */
+  const activeOverlayForCanvas = React.useMemo(() => {
+    if (!selectedPage || activeExtraImageId == null) return null
+    if (activeExtraImageId === 'alt' && selectedPage.image_alt) {
+      const raw = selectedPage.image_alt
+      return {
+        url: raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`,
+        scale: selectedPage.image_alt_scale ?? 1,
+        offset_x: selectedPage.image_alt_offset_x ?? 0,
+        offset_y: selectedPage.image_alt_offset_y ?? 0,
+      }
+    }
+    const overlay = (selectedPage.overlays || []).find((o) => o.id === activeExtraImageId)
+    if (overlay) {
+      const raw = overlay.image
+      return {
+        url: raw.startsWith('http') ? raw : `${MEDIA_BASE}/${raw}`,
+        scale: overlay.scale ?? 1,
+        offset_x: overlay.offset_x ?? 0,
+        offset_y: overlay.offset_y ?? 0,
+      }
+    }
+    return null
+  }, [selectedPage, activeExtraImageId])
 
   /** List of extra images for the counts sidebar (image_alt + overlays). */
   const pageExtraImages = selectedPage
@@ -790,20 +805,22 @@ export default function PlanViewerPage() {
   /* ─── Count definition CRUD ─── */
 
   function handleCountDefinitionCreated(def: CountDefinition) {
-    setCountDefinitions([...countDefinitions, def])
+    setCountDefinitions((prev) => [...prev, def])
     setActiveCountId(def.id)
   }
 
   function handleCountDefinitionUpdated(def: CountDefinition) {
-    setCountDefinitions(countDefinitions.map((d) => (d.id === def.id ? def : d)))
+    setCountDefinitions((prev) => prev.map((d) => (d.id === def.id ? def : d)))
   }
 
   function handleCountDefinitionDeleted(id: number) {
-    setCountDefinitions(countDefinitions.filter((d) => d.id !== id))
-    const newItems = countItems.filter((item) => item.count_definition !== id)
-    setCountItems(newItems)
-    pushHistory(newItems)
-    if (activeCountId === id) setActiveCountId(null)
+    setCountDefinitions((prev) => prev.filter((d) => d.id !== id))
+    setCountItems((prev) => {
+      const nextItems = prev.filter((item) => item.count_definition !== id)
+      pushHistory(nextItems)
+      return nextItems
+    })
+    setActiveCountId((prev) => (prev === id ? null : prev))
   }
 
   // When user selects a count, save its trade as preset for next "Create count" (dataset/trade preset for all counts).
@@ -1714,7 +1731,10 @@ export default function PlanViewerPage() {
               backgroundView={backgroundView}
               onBackgroundViewChange={(view) => {
                 setBackgroundView(view)
-                if (view === 'plan') setActiveExtraImageId(null)
+                if (view === 'plan') {
+                  setActiveExtraImageId(null)
+                  setEditingExtraImageId(null)
+                }
               }}
               onUploadAltClick={() => uploadAltInputRef.current?.click()}
               uploadAltLoading={uploadAltLoading}
@@ -2020,6 +2040,44 @@ export default function PlanViewerPage() {
                           onSaveStart={markSaving}
                           onSaveEnd={markSaved}
                           onSaveError={markSaveError}
+                          overlayImage={activeOverlayForCanvas}
+                          overlayEditing={editingExtraImageId != null && editingExtraImageId === activeExtraImageId}
+                          onOverlayTransformChange={async (transform) => {
+                            if (!selectedPage || activeExtraImageId == null) return
+
+                            // Optimistically update local page state so the overlay moves smoothly without flicker.
+                            setSelectedPage((prev) => {
+                              if (!prev) return prev
+                              if (activeExtraImageId === 'alt') {
+                                return {
+                                  ...prev,
+                                  image_alt_scale: transform.scale,
+                                  image_alt_offset_x: transform.offset_x,
+                                  image_alt_offset_y: transform.offset_y,
+                                }
+                              }
+                              return {
+                                ...prev,
+                                overlays: (prev.overlays || []).map((o) =>
+                                  o.id === activeExtraImageId
+                                    ? {
+                                        ...o,
+                                        scale: transform.scale,
+                                        offset_x: transform.offset_x,
+                                        offset_y: transform.offset_y,
+                                      }
+                                    : o,
+                                ),
+                              }
+                            })
+
+                            // Persist in background; ignore response to avoid re-render flashes.
+                            try {
+                              await updateExtraImageTransform(selectedPage.id, activeExtraImageId, transform)
+                            } catch (err) {
+                              console.error('Failed to save overlay transform:', err)
+                            }
+                          }}
                         />
                       )}
                     </div>
@@ -2069,6 +2127,7 @@ export default function PlanViewerPage() {
             onActiveExtraImageChange={(id) => {
               setActiveExtraImageId(id)
               setBackgroundView(id != null ? 'satellite' : 'plan')
+              if (id !== editingExtraImageId) setEditingExtraImageId(null)
             }}
             onRenameExtraImage={async (id, name) => {
               if (!selectedPage) return
@@ -2077,13 +2136,15 @@ export default function PlanViewerPage() {
               const nextPage = data?.pages?.find((p) => p.id === selectedPage.id)
               if (nextPage) setSelectedPage(nextPage)
             }}
+            editingExtraImageId={editingExtraImageId}
+            onEditExtraImage={(id) => setEditingExtraImageId(id)}
             onDeleteExtraImage={async (id) => {
               if (!selectedPage) return
-              // If deleting currently active background, switch back to plan
               if (activeExtraImageId === id) {
                 setActiveExtraImageId(null)
                 setBackgroundView('plan')
               }
+              if (editingExtraImageId === id) setEditingExtraImageId(null)
               await deletePlanPageExtraImage(selectedPage.id, id)
               const data = await loadPlanSet()
               const nextPage = data?.pages?.find((p) => p.id === selectedPage.id)

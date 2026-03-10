@@ -56,7 +56,7 @@ class ProjectSerializer(serializers.ModelSerializer):
 class PlanPageOverlaySerializer(serializers.ModelSerializer):
     class Meta:
         model = PlanPageOverlay
-        fields = ("id", "image", "order", "name")
+        fields = ("id", "image", "order", "name", "scale", "offset_x", "offset_y")
         read_only_fields = ("id",)
 
 
@@ -66,8 +66,9 @@ class PlanPageSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlanPage
         fields = [
-            "id", "page_number", "title", "image", "image_alt", "image_alt_name", "dpi_x", "dpi_y",
-            "plan_set", "created_at", "updated_at", "overlays",
+            "id", "page_number", "title", "image", "image_alt", "image_alt_name",
+            "image_alt_scale", "image_alt_offset_x", "image_alt_offset_y",
+            "dpi_x", "dpi_y", "plan_set", "created_at", "updated_at", "overlays",
         ]
         read_only_fields = ("id", "created_at", "updated_at")
 

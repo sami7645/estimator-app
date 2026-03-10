@@ -91,6 +91,9 @@ class PlanPage(TimeStampedModel):
     image = models.ImageField(upload_to="plans/pages/")
     image_alt = models.ImageField(upload_to="plans/pages_alt/", blank=True, null=True)  # e.g. satellite view, same scale
     image_alt_name = models.CharField(max_length=255, blank=True, default="")
+    image_alt_scale = models.FloatField(default=1.0)
+    image_alt_offset_x = models.FloatField(default=0.0)
+    image_alt_offset_y = models.FloatField(default=0.0)
     # Stored rendering resolution (dots per inch) for this page image.
     # We render PDF pages using PyMuPDF at a fixed zoom, so knowing the
     # effective DPI lets the frontend derive a pixel-to-feet scale directly
@@ -113,6 +116,9 @@ class PlanPageOverlay(TimeStampedModel):
     image = models.ImageField(upload_to="plans/pages_overlays/")
     order = models.PositiveIntegerField(default=0)
     name = models.CharField(max_length=255, blank=True, default="")
+    scale = models.FloatField(default=1.0)
+    offset_x = models.FloatField(default=0.0)
+    offset_y = models.FloatField(default=0.0)
 
     class Meta:
         ordering = ["order", "id"]

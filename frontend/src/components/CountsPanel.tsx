@@ -45,6 +45,8 @@ interface CountsPanelProps {
   onActiveExtraImageChange?: (id: 'alt' | number | null) => void
   onRenameExtraImage?: (id: 'alt' | number, name: string) => Promise<void> | void
   onDeleteExtraImage?: (id: 'alt' | number) => Promise<void> | void
+  editingExtraImageId?: 'alt' | number | null
+  onEditExtraImage?: (id: 'alt' | number | null) => void
   onUploadAltClick?: () => void
   uploadAltLoading?: boolean
 }
@@ -78,6 +80,8 @@ export default function CountsPanel({
   onActiveExtraImageChange,
   onRenameExtraImage,
   onDeleteExtraImage,
+  editingExtraImageId = null,
+  onEditExtraImage,
   onUploadAltClick,
   uploadAltLoading = false,
 }: CountsPanelProps) {
@@ -169,6 +173,11 @@ export default function CountsPanel({
   function handleContextMenu(e: React.MouseEvent, countId: number) {
     e.preventDefault()
     e.stopPropagation()
+    // If Ctrl+clicking already built a multi-selection that includes this count,
+    // keep it; otherwise treat this as a single-count right-click.
+    if (!selectedCountIds?.has(countId)) {
+      onSelectedCountIdsChange?.(new Set([countId]))
+    }
     setContextMenu({ x: e.clientX, y: e.clientY, countId })
   }
 
@@ -181,6 +190,22 @@ export default function CountsPanel({
       console.error('Failed to delete:', err)
     }
     setContextMenu(null)
+  }
+
+  async function handleDeleteSelected() {
+    const ids = selectedCountIds ? Array.from(selectedCountIds) : []
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} selected count definition${ids.length > 1 ? 's' : ''} and all their items?`)) return
+    setContextMenu(null)
+    for (const id of ids) {
+      try {
+        await deleteCountDefinition(id)
+        onCountDefinitionDeleted(id)
+      } catch (err) {
+        console.error('Failed to delete count', id, err)
+      }
+    }
+    onSelectedCountIdsChange?.(new Set())
   }
 
   async function handleQuickEditName(countDef: CountDefinition) {
@@ -307,6 +332,7 @@ export default function CountsPanel({
         {/* One row per extra image (image_alt + overlays); squared thumbnail like color dot; eye = show this image as background */}
         {selectedPage && pageExtraImages.length > 0 && onActiveExtraImageChange && pageExtraImages.map((entry, index) => {
           const isActive = activeExtraImageId === entry.id
+          const isEditingThis = editingExtraImageId === entry.id
           return (
             <div
               key={entry.id}
@@ -338,6 +364,23 @@ export default function CountsPanel({
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                   )}
                 </button>
+                {onEditExtraImage && (
+                  <button
+                    className={`eye-btn edit-transform-btn ${isEditingThis ? 'editing' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (!isActive) onActiveExtraImageChange(entry.id)
+                      onEditExtraImage(isEditingThis ? null : entry.id)
+                    }}
+                    title={isEditingThis ? 'Finish editing transform' : 'Edit image position & size'}
+                  >
+                    {isEditingThis ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    )}
+                  </button>
+                )}
                 <div className="count-info">
                   <span className="count-image-thumb" title="Alternate / overlay image">
                     <img src={entry.imageUrl} alt="" />
@@ -522,52 +565,73 @@ export default function CountsPanel({
       )}
 
       {/* ── Context Menu ── */}
-      {contextMenu && countDefForContext && (
-        <div
-          ref={contextMenuRef}
-          className="context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
+      {contextMenu && (() => {
+        const multiSelected = selectedCountIds && selectedCountIds.size > 1 && selectedCountIds.has(contextMenu.countId)
+        if (multiSelected) {
+          return (
+            <div
+              ref={contextMenuRef}
+              className="context-menu"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+            >
+              <div
+                className="context-menu-item danger"
+                onClick={() => handleDeleteSelected()}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Delete Selected ({selectedCountIds!.size})
+              </div>
+            </div>
+          )
+        }
+        if (!countDefForContext) return null
+        return (
           <div
-            className="context-menu-item"
-            onClick={() => handleQuickEditName(countDefForContext)}
+            ref={contextMenuRef}
+            className="context-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            Edit Name
-          </div>
-          <div
-            className="context-menu-item"
-            onClick={() => handleEditFull(countDefForContext)}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
-            Edit Color
-          </div>
-          {countDefForContext.count_type === 'each' && (
+            <div
+              className="context-menu-item"
+              onClick={() => handleQuickEditName(countDefForContext)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Edit Name
+            </div>
             <div
               className="context-menu-item"
               onClick={() => handleEditFull(countDefForContext)}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><circle cx="17.5" cy="6.5" r="3.5"/><polygon points="12,16 17,22 22,16"/></svg>
-              Edit Shape
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>
+              Edit Color
             </div>
-          )}
-          <div
-            className="context-menu-item"
-            onClick={() => handleEditFull(countDefForContext)}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-            Edit Trade
+            {countDefForContext.count_type === 'each' && (
+              <div
+                className="context-menu-item"
+                onClick={() => handleEditFull(countDefForContext)}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><circle cx="17.5" cy="6.5" r="3.5"/><polygon points="12,16 17,22 22,16"/></svg>
+                Edit Shape
+              </div>
+            )}
+            <div
+              className="context-menu-item"
+              onClick={() => handleEditFull(countDefForContext)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              Edit Trade
+            </div>
+            <div className="context-menu-divider" />
+            <div
+              className="context-menu-item danger"
+              onClick={() => handleDelete(contextMenu.countId)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Delete Count
+            </div>
           </div>
-          <div className="context-menu-divider" />
-          <div
-            className="context-menu-item danger"
-            onClick={() => handleDelete(contextMenu.countId)}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            Delete Count
-          </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ── Image Context Menu ── */}
       {imageContextMenu && (

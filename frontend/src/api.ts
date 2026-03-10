@@ -94,6 +94,9 @@ export type PlanPageOverlay = {
   image: string
   order: number
   name?: string
+  scale?: number
+  offset_x?: number
+  offset_y?: number
 }
 
 export type PlanPage = {
@@ -104,6 +107,9 @@ export type PlanPage = {
   /** First extra background (e.g. satellite view); same scale as image. */
   image_alt?: string | null
   image_alt_name?: string
+  image_alt_scale?: number
+  image_alt_offset_x?: number
+  image_alt_offset_y?: number
   /** Additional overlay images (multiple per page). */
   overlays?: PlanPageOverlay[]
   plan_set: number
@@ -374,6 +380,23 @@ export async function deletePlanPageExtraImage(pageId: number, extraId: 'alt' | 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Failed to delete image')
+  }
+  return res.json()
+}
+
+export async function updateExtraImageTransform(
+  pageId: number,
+  extraId: 'alt' | number,
+  data: { scale?: number; offset_x?: number; offset_y?: number },
+): Promise<PlanPage> {
+  const res = await fetch(`${API_BASE}/pages/${pageId}/extra-images/${extraId}/transform/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || 'Failed to update image transform')
   }
   return res.json()
 }

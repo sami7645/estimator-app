@@ -303,6 +303,22 @@
   opacity: 0.7;
 }
 
+.edit-transform-btn {
+  width: 20px;
+  height: 20px;
+  color: #9ca3af;
+}
+
+.edit-transform-btn:hover {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.edit-transform-btn.editing {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
 .count-info {
   flex: 1;
   display: flex;

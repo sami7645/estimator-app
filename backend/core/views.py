@@ -294,6 +294,44 @@ class PlanPageViewSet(viewsets.ReadOnlyModelViewSet):
         page.refresh_from_db()
         return Response(PlanPageSerializer(page).data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["patch"], url_path=r"extra-images/(?P<extra_id>[^/.]+)/transform")
+    def update_extra_image_transform(self, request, pk=None, extra_id=None):
+        """Update scale / offset for an extra background image."""
+        page = self.get_object()
+        scale = request.data.get("scale")
+        offset_x = request.data.get("offset_x")
+        offset_y = request.data.get("offset_y")
+
+        if extra_id == "alt":
+            if not page.image_alt:
+                return Response({"detail": "No alt image on this page."}, status=status.HTTP_400_BAD_REQUEST)
+            fields = []
+            if scale is not None:
+                page.image_alt_scale = float(scale)
+                fields.append("image_alt_scale")
+            if offset_x is not None:
+                page.image_alt_offset_x = float(offset_x)
+                fields.append("image_alt_offset_x")
+            if offset_y is not None:
+                page.image_alt_offset_y = float(offset_y)
+                fields.append("image_alt_offset_y")
+            if fields:
+                page.save(update_fields=fields)
+        else:
+            try:
+                overlay = page.overlays.get(id=int(extra_id))
+            except Exception:
+                return Response({"detail": "Overlay not found."}, status=status.HTTP_404_NOT_FOUND)
+            if scale is not None:
+                overlay.scale = float(scale)
+            if offset_x is not None:
+                overlay.offset_x = float(offset_x)
+            if offset_y is not None:
+                overlay.offset_y = float(offset_y)
+            overlay.save()
+        page.refresh_from_db()
+        return Response(PlanPageSerializer(page).data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["delete"], url_path=r"extra-images/(?P<extra_id>[^/.]+)")
     def delete_extra_image(self, request, pk=None, extra_id=None):
         page = self.get_object()
