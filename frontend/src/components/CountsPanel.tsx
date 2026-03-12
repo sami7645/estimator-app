@@ -119,6 +119,42 @@ export default function CountsPanel({
     return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [selectionMode, onSelectedCountIdsChange])
 
+  // Dismiss ctrl/cmd multi-select when clicking outside the counts list (left click)
+  useEffect(() => {
+    if (!onSelectedCountIdsChange) return
+    if (!selectedCountIds || selectedCountIds.size === 0) return
+    function onDocMouseDown(e: MouseEvent) {
+      const root = countsListRef.current
+      const menu = contextMenuRef.current
+      if (root && root.contains(e.target as Node)) return
+      if (menu && menu.contains(e.target as Node)) return
+      setSelectionMode(false)
+      onSelectedCountIdsChange?.(new Set())
+      setContextMenu(null)
+      setImageContextMenu(null)
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [selectedCountIds, onSelectedCountIdsChange])
+
+  // Also dismiss selection on right-click outside the counts list (covers ctrl+click multi-select too).
+  useEffect(() => {
+    if (!onSelectedCountIdsChange) return
+    if (!selectedCountIds || selectedCountIds.size === 0) return
+    function onDocContextMenu(e: MouseEvent) {
+      const root = countsListRef.current
+      const menu = contextMenuRef.current
+      if (root && root.contains(e.target as Node)) return
+      if (menu && menu.contains(e.target as Node)) return
+      setSelectionMode(false)
+      onSelectedCountIdsChange?.(new Set())
+      setContextMenu(null)
+      setImageContextMenu(null)
+    }
+    document.addEventListener('contextmenu', onDocContextMenu)
+    return () => document.removeEventListener('contextmenu', onDocContextMenu)
+  }, [selectedCountIds, onSelectedCountIdsChange])
+
   const refreshDatasetStats = useCallback(() => {
     if (token) {
       fetchDatasetStats(token, planSetId, selectedPage?.id).then(setDatasetStats).catch(() => {})
@@ -153,11 +189,6 @@ export default function CountsPanel({
   function handleCountRowMouseDown(e: React.MouseEvent, countId: number) {
     if (e.button !== 0) return
     if (e.ctrlKey || e.metaKey) {
-      // Ctrl/cmd click behaves like normal click unless selection mode is enabled
-      if (!selectionMode) {
-        onActiveCountChange(countId)
-        return
-      }
       const next = new Set(selectedCountIds)
       if (next.has(countId)) next.delete(countId)
       else next.add(countId)
@@ -174,7 +205,10 @@ export default function CountsPanel({
       onActiveCountChange(countId)
       return
     }
-    // Normal mode: just activate count (no bulk selection)
+    // Normal mode: clicking a specific count dismisses any multi-select, then activates this count
+    if (selectedCountIds && selectedCountIds.size > 0) {
+      onSelectedCountIdsChange?.(new Set())
+    }
     onActiveCountChange(activeCountId === countId ? null : countId)
   }
 
