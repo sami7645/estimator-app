@@ -96,11 +96,28 @@ export default function CountsPanel({
 
   // Section expand/collapse states
   const [isCountsExpanded, setIsCountsExpanded] = useState(true)
+  const [selectionMode, setSelectionMode] = useState(false)
   const [showAutoDetect, setShowAutoDetect] = useState(false)
   const [selectedTrades, setSelectedTrades] = useState<Set<string>>(new Set())
   const [detecting, setDetecting] = useState(false)
   const [detectResult, setDetectResult] = useState<{ count: number; message: string } | null>(null)
   const [datasetStats, setDatasetStats] = useState<DatasetStats>({})
+
+  const countsListRef = useRef<HTMLDivElement>(null)
+
+  // Dismiss selection mode when clicking outside the counts list
+  useEffect(() => {
+    if (!selectionMode) return
+    function onDocMouseDown(e: MouseEvent) {
+      const root = countsListRef.current
+      if (!root) return
+      if (root.contains(e.target as Node)) return
+      setSelectionMode(false)
+      onSelectedCountIdsChange?.(new Set())
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [selectionMode, onSelectedCountIdsChange])
 
   const refreshDatasetStats = useCallback(() => {
     if (token) {
@@ -136,6 +153,11 @@ export default function CountsPanel({
   function handleCountRowMouseDown(e: React.MouseEvent, countId: number) {
     if (e.button !== 0) return
     if (e.ctrlKey || e.metaKey) {
+      // Ctrl/cmd click behaves like normal click unless selection mode is enabled
+      if (!selectionMode) {
+        onActiveCountChange(countId)
+        return
+      }
       const next = new Set(selectedCountIds)
       if (next.has(countId)) next.delete(countId)
       else next.add(countId)
@@ -143,8 +165,16 @@ export default function CountsPanel({
       onActiveCountChange(countId)
       return
     }
-    setIsDragSelecting(true)
-    onSelectedCountIdsChange?.(new Set([countId]))
+    if (selectionMode) {
+      // In selection mode, a normal click toggles selection
+      const next = new Set(selectedCountIds)
+      if (next.has(countId)) next.delete(countId)
+      else next.add(countId)
+      onSelectedCountIdsChange?.(next)
+      onActiveCountChange(countId)
+      return
+    }
+    // Normal mode: just activate count (no bulk selection)
     onActiveCountChange(activeCountId === countId ? null : countId)
   }
 
@@ -179,6 +209,12 @@ export default function CountsPanel({
       onSelectedCountIdsChange?.(new Set([countId]))
     }
     setContextMenu({ x: e.clientX, y: e.clientY, countId })
+  }
+
+  function handleSelectAllFromMenu() {
+    setContextMenu(null)
+    setSelectionMode(true)
+    onSelectedCountIdsChange?.(new Set(countDefinitions.map((d) => d.id)))
   }
 
   async function handleDelete(id: number) {
@@ -328,7 +364,10 @@ export default function CountsPanel({
 
         {isCountsExpanded && (
           <div className="section-body">
-      <div className="counts-list">
+      <div
+        ref={countsListRef}
+        className={`counts-list ${selectionMode ? 'selection-mode' : ''}`}
+      >
         {/* One row per extra image (image_alt + overlays); squared thumbnail like color dot; eye = show this image as background */}
         {selectedPage && pageExtraImages.length > 0 && onActiveExtraImageChange && pageExtraImages.map((entry, index) => {
           const isActive = activeExtraImageId === entry.id
@@ -407,6 +446,26 @@ export default function CountsPanel({
               onContextMenu={(e) => handleContextMenu(e, countDef.id)}
             >
               <div className="count-row-header">
+                {selectionMode && onSelectedCountIdsChange && (
+                  <label
+                    className="count-row-checkbox-wrap"
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    title={selectedCountIds?.has(countDef.id) ? 'Unselect' : 'Select'}
+                  >
+                    <input
+                      type="checkbox"
+                      className="count-row-checkbox"
+                      checked={selectedCountIds?.has(countDef.id) ?? false}
+                      onChange={() => {
+                        const next = new Set(selectedCountIds ?? [])
+                        if (next.has(countDef.id)) next.delete(countDef.id)
+                        else next.add(countDef.id)
+                        onSelectedCountIdsChange(next)
+                      }}
+                    />
+                  </label>
+                )}
                 <button
                   className="expand-btn"
                   onClick={(e) => {
@@ -591,6 +650,13 @@ export default function CountsPanel({
             className="context-menu"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
+            <div
+              className="context-menu-item"
+              onClick={() => handleSelectAllFromMenu()}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              Select All
+            </div>
             <div
               className="context-menu-item"
               onClick={() => handleQuickEditName(countDefForContext)}

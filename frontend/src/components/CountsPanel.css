@@ -219,6 +219,35 @@
   background: rgba(220, 38, 38, 0.12);
 }
 
+.counts-select-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.counts-select-all-btn {
+  font-size: 12px;
+  color: #3b82f6;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.counts-select-all-btn:hover {
+  color: #2563eb;
+}
+
+.counts-selected-hint {
+  font-size: 11px;
+  color: #6b7280;
+}
+
 .counts-list {
   flex: 0 0 auto;
 }
@@ -252,6 +281,23 @@
 .count-row.hidden-count {
   /* Eye icon already indicates hidden state - no need to fade the row */
 }
+
+.count-row-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.count-row-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #3b82f6;
+}
+
+/* Row checkbox only renders in selection mode */
 
 .count-row-header {
   display: flex;

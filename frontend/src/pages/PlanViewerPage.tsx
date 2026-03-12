@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Menu, Keyboard as KeyboardIcon, X as CloseIcon, FileDown, FileSpreadsheet, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { PlanSet, PlanPage, CountDefinition, CountItem, AutoDetectResult } from '../api'
-import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, uploadPlanPageAlt, renamePlanPageExtraImage, deletePlanPageExtraImage, updateExtraImageTransform, MEDIA_BASE } from '../api'
+import { fetchPlanSet, fetchCountDefinitions, fetchCountItems, fetchScaleCalibration, deleteCountItem, createCountItem, updateCountItem, deleteCountDefinition, uploadPlanPageAlt, renamePlanPageExtraImage, deletePlanPageExtraImage, updateExtraImageTransform, MEDIA_BASE } from '../api'
 import { exportPlanAsPdf } from '../utils/exportPlanPdf'
 import CountsPanel from '../components/CountsPanel'
 import ViewerCanvas from '../components/ViewerCanvas'
@@ -465,6 +465,23 @@ export default function PlanViewerPage() {
     function handleKeyDown(e: KeyboardEvent) {
       // Use ref for instant check — avoids stale closure race with ViewerCanvas
       if (isDrawingRef.current) return
+      // Backspace / Delete: delete selected counts when focus is not in an input.
+      // IMPORTANT: ViewerCanvas also handles Backspace/Delete and calls preventDefault().
+      // We intentionally handle count-definition deletion BEFORE checking defaultPrevented,
+      // and we register this listener in capture phase so it wins.
+      const target = e.target as Node
+      const inInput =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      const { fn: deleteSelected, ids } = deleteSelectedCountsRef.current
+      if (!inInput && (e.key === 'Backspace' || e.key === 'Delete') && ids.size > 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        deleteSelected(Array.from(ids))
+        return
+      }
+
       if (e.defaultPrevented) return
 
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
@@ -486,8 +503,8 @@ export default function PlanViewerPage() {
         }
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true } as any)
   }, [historyIndex, history.length])
 
   /* ─── Close menu on outside click ─── */
@@ -822,6 +839,25 @@ export default function PlanViewerPage() {
     })
     setActiveCountId((prev) => (prev === id ? null : prev))
   }
+
+  async function handleDeleteSelectedCounts(ids: number[]) {
+    if (ids.length === 0) return
+    const n = ids.length
+    const label = n === 1 ? 'count' : 'counts'
+    if (!confirm(`Delete ${n} ${label}? This will delete the count definition${n === 1 ? '' : 's'} and all their items.`)) return
+    setSelectedCountIds(new Set())
+    for (const id of ids) {
+      try {
+        await deleteCountDefinition(id)
+        handleCountDefinitionDeleted(id)
+      } catch (err) {
+        console.error('Failed to delete count', id, err)
+      }
+    }
+  }
+
+  const deleteSelectedCountsRef = useRef<{ fn: (ids: number[]) => void; ids: Set<number> }>({ fn: () => {}, ids: new Set() })
+  deleteSelectedCountsRef.current = { fn: handleDeleteSelectedCounts, ids: selectedCountIds }
 
   // When user selects a count, save its trade as preset for next "Create count" (dataset/trade preset for all counts).
   useEffect(() => {
@@ -1921,7 +1957,7 @@ export default function PlanViewerPage() {
                         )
                       })()}
 
-                      {/* Notes overlay: HTML so zoom doesn't redraw them; fixed screen size via scale(1/ez) */}
+                      {/* Notes overlay: sticky-note style; fixed screen size via scale(1/ez) */}
                       {imageSize.width > 0 && imageSize.height > 0 && currentPageNotes.length > 0 && (
                         <div
                           className="viewer-notes-overlay"
@@ -1939,11 +1975,22 @@ export default function PlanViewerPage() {
                             const pos = noteDraggingId === note.id && noteDragPosition
                               ? noteDragPosition
                               : { x: note.x, y: note.y }
+                            const hex = note.color.replace('#', '')
+                            const fullHex = hex.length === 3
+                              ? hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
+                              : hex
+                            const r = fullHex.length >= 6 ? parseInt(fullHex.slice(0, 2), 16) : 255
+                            const g = fullHex.length >= 6 ? parseInt(fullHex.slice(2, 4), 16) : 255
+                            const b = fullHex.length >= 6 ? parseInt(fullHex.slice(4, 6), 16) : 255
+                            const isDark = (r + g + b) / 3 < 128
+                            const textColor = isDark ? '#fff' : '#1a1a1a'
+                            const noteBg = `rgba(${r},${g},${b},0.88)`
                             return (
                               <div
                                 key={note.id}
                                 role="button"
                                 tabIndex={0}
+                                className="viewer-note-sticky"
                                 style={{
                                   position: 'absolute',
                                   left: `${pos.x * 100}%`,
@@ -1952,23 +1999,16 @@ export default function PlanViewerPage() {
                                   transformOrigin: 'center center',
                                   width: 'max-content',
                                   maxWidth: 240,
-                                  minHeight: 24,
-                                  padding: '6px 8px',
+                                  minWidth: 120,
+                                  minHeight: 32,
                                   boxSizing: 'border-box',
-                                  background: note.color + '30',
-                                  border: `1px solid ${note.color}99`,
-                                  borderRadius: 2,
-                                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-                                  fontSize: 12,
-                                  color: '#333',
-                                  fontFamily: 'Inter, system-ui, sans-serif',
-                                  overflow: 'hidden',
-                                  whiteSpace: 'pre-wrap',
-                                  wordBreak: 'break-word',
+                                  background: noteBg,
+                                  borderRadius: 4,
+                                  boxShadow: '0 2px 8px rgba(0,0,0,0.14)',
+                                  overflow: 'visible',
                                   pointerEvents: 'auto',
                                   cursor: noteDraggingId === note.id ? 'grabbing' : 'grab',
                                   userSelect: 'none',
-                                  backdropFilter: 'blur(1px)',
                                 }}
                                 onClick={(e) => {
                                   e.stopPropagation()
@@ -1991,7 +2031,32 @@ export default function PlanViewerPage() {
                                   setNoteDraggingId(note.id)
                                 }}
                               >
-                                {note.text || ' '}
+                                {/* Adhesive strip at top */}
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    height: 10,
+                                    background: 'rgba(0,0,0,0.12)',
+                                    borderRadius: '4px 4px 0 0',
+                                    pointerEvents: 'none',
+                                  }}
+                                />
+                                {/* Content */}
+                                <div
+                                  style={{
+                                    padding: '14px 10px 10px',
+                                    fontSize: 12,
+                                    color: textColor,
+                                    fontFamily: 'Inter, system-ui, sans-serif',
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                  }}
+                                >
+                                  {note.text || ' '}
+                                </div>
                               </div>
                             )
                           })}
